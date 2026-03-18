@@ -1,0 +1,16 @@
+{
+  "name": "typespec-as-schema",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@typespec/compiler": "^1.10.0",
+    "@typespec/json-schema": "^1.10.0"
+  }
+}
