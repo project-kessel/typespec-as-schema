@@ -1,9 +1,11 @@
 {
   "name": "typespec-as-schema",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "emit:spicedb": "tsx emitter/spicedb-emitter.ts main.tsp"
   },
   "keywords": [],
   "author": "",
@@ -12,5 +14,8 @@
   "dependencies": {
     "@typespec/compiler": "^1.10.0",
     "@typespec/json-schema": "^1.10.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
   }
 }

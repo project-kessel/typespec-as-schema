@@ -7,3 +7,4 @@
 
 import "./schemas/rbac.tsp";
 import "./schemas/hbi.tsp";
+import "./schemas/remediations.tsp";
