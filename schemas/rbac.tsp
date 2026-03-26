@@ -16,7 +16,7 @@ model Principal {}
 /** A role defines a named collection of permissions */
 model Role {
   /** Wildcard — can hold all principals (principal:*) */
-  all_all_all: BoolRelation<Principal>;
+  any_any_any: BoolRelation<Principal>;
 }
 
 /** Binds a subject to one or more roles */
@@ -36,7 +36,7 @@ model Workspace {
   parent: Assignable<Workspace, Cardinality.AtMostOne>;
 
   /** Role bindings granting access to this workspace */
-  user_grant: Assignable<RoleBinding, Cardinality.Any>;
+  binding: Assignable<RoleBinding, Cardinality.Any>;
 }
 
 // ─── Extension Template ──────────────────────────────────────────────
@@ -46,15 +46,16 @@ model Workspace {
 //
 // Template semantics (what the custom emitter would produce):
 //   On Role:
-//     {app}_all_all: bool                     (if not exists)
-//     {app}_{resource}_all: bool              (if not exists)
-//     {app}_all_{verb}: bool                  (if not exists)
+//     {app}_any_any: bool                     (if not exists)
+//     {app}_{resource}_any: bool              (if not exists)
+//     {app}_any_{verb}: bool                  (if not exists)
 //     {app}_{resource}_{verb}: bool           (if not exists)
-//     {v2Perm}: or(all_all_all, {app}_all_all, {app}_{resource}_all, {app}_all_{verb}, {app}_{resource}_{verb})
+//     {v2Perm}: or(any_any_any, {app}_any_any, {app}_{resource}_any, {app}_any_{verb}, {app}_{resource}_{verb})
 //   On RoleBinding:
 //     {v2Perm}: and(subject, granted.{v2Perm})
 //   On Workspace:
-//     {v2Perm}: or(user_grant.{v2Perm}, parent.{v2Perm})
+//     {v2Perm}: or(binding.{v2Perm}, parent.{v2Perm})
+//     view_metadata: or(read-verb v2Perms...)  (accumulated from read-verb extensions)
 //
 // This is modeled as a parameterized model so the emitter can discover it.
 
