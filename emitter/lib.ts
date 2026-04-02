@@ -57,6 +57,10 @@ export function getTemplateArg(model: Model, index: number): Type | undefined {
 export function getEnumMemberName(t: Type | undefined): string | undefined {
   if (!t) return undefined;
   if (t.kind === "EnumMember") return t.name;
+  // Template args may be wrapped in a Value object with a .type property
+  if ("type" in t && (t as any).type?.kind === "EnumMember") {
+    return (t as any).type.name;
+  }
   return undefined;
 }
 
@@ -528,6 +532,35 @@ export function generateMetadata(
   }
 
   return metadata;
+}
+
+export interface IntermediateRepresentation {
+  version: string;
+  generatedAt: string;
+  source: string;
+  resources: ResourceDef[];
+  extensions: V1Extension[];
+  spicedb: string;
+  metadata: Record<string, ServiceMetadata>;
+  jsonSchemas: Record<string, UnifiedJsonSchema>;
+}
+
+export function generateIR(
+  mainFile: string,
+  resources: ResourceDef[],
+  extensions: V1Extension[]
+): IntermediateRepresentation {
+  const fullSchema = buildSchemaFromTypeGraph(resources, extensions);
+  return {
+    version: "1.0.0",
+    generatedAt: new Date().toISOString(),
+    source: mainFile,
+    resources: fullSchema,
+    extensions,
+    spicedb: generateSpiceDB(fullSchema),
+    metadata: generateMetadata(resources, extensions),
+    jsonSchemas: generateUnifiedJsonSchemas(resources),
+  };
 }
 
 export { compile, NodeHost, path };

@@ -1,0 +1,70 @@
+{
+  "name": "inventory",
+  "imports": [
+    "rbac"
+  ],
+  "types": [
+    {
+      "name": "host",
+      "visibility": "public",
+      "relations": [
+        {
+          "name": "workspace",
+          "body": {
+            "kind": "self",
+            "types": [
+              {
+                "namespace": "rbac",
+                "name": "workspace"
+              }
+            ],
+            "cardinality": "ExactlyOne"
+          }
+        },
+        {
+          "name": "view",
+          "body": {
+            "kind": "nested_reference",
+            "relation": "workspace",
+            "sub_relation": "inventory_host_view"
+          }
+        },
+        {
+          "name": "update",
+          "body": {
+            "kind": "nested_reference",
+            "relation": "workspace",
+            "sub_relation": "inventory_host_update"
+          }
+        }
+      ]
+    }
+  ],
+  "extension_references": [
+    {
+      "namespace": "rbac",
+      "name": "workspace_permission",
+      "params": {
+        "full_name": "inventory_host_view",
+        "v1_resource": "hosts",
+        "v1_verb": "read"
+      }
+    },
+    {
+      "namespace": "rbac",
+      "name": "add_view_metadata",
+      "params": {
+        "full_name": "inventory_host_view"
+      }
+    },
+    {
+      "namespace": "rbac",
+      "name": "workspace_permission",
+      "params": {
+        "full_name": "inventory_host_update",
+        "v1_resource": "hosts",
+        "v1_verb": "write"
+      }
+    }
+  ]
+}

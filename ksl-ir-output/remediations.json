@@ -1,0 +1,33 @@
+{
+  "name": "remediations",
+  "imports": [
+    "rbac"
+  ],
+  "extension_references": [
+    {
+      "namespace": "rbac",
+      "name": "workspace_permission",
+      "params": {
+        "full_name": "remediations_remediation_view",
+        "v1_resource": "remediations",
+        "v1_verb": "read"
+      }
+    },
+    {
+      "namespace": "rbac",
+      "name": "add_view_metadata",
+      "params": {
+        "full_name": "remediations_remediation_view"
+      }
+    },
+    {
+      "namespace": "rbac",
+      "name": "workspace_permission",
+      "params": {
+        "full_name": "remediations_remediation_update",
+        "v1_resource": "remediations",
+        "v1_verb": "write"
+      }
+    }
+  ]
+}
