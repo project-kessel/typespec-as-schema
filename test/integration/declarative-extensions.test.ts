@@ -6,13 +6,16 @@ import {
   discoverResources,
   buildSchemaFromTypeGraph,
   generateSpiceDB,
+  generateUnifiedJsonSchemas,
   type ResourceDef,
   type V1Extension,
+  type UnifiedJsonSchema,
 } from "../../emitter/lib.js";
 import {
   discoverDeclaredExtensions,
   applyDeclaredPatches,
   type DeclaredExtension,
+  type JsonSchemaFieldRule,
 } from "../../emitter/declarative-extensions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +31,8 @@ let declarativeSpiceDB: string;
 let hardcodedFull: ResourceDef[];
 let declarativeFull: ResourceDef[];
 let declaredExtensions: DeclaredExtension[];
+let jsonSchemaFields: JsonSchemaFieldRule[];
+let declarativeJsonSchemas: Record<string, UnifiedJsonSchema>;
 
 beforeAll(async () => {
   // 1. Hardcoded approach: compile main.tsp, apply buildSchemaFromTypeGraph
@@ -40,8 +45,11 @@ beforeAll(async () => {
   const declProgram = await compile(NodeHost, mainDeclarative, { noEmit: true });
   const declDiscovered = discoverResources(declProgram);
   declaredExtensions = discoverDeclaredExtensions(declProgram);
-  declarativeFull = applyDeclaredPatches(declDiscovered.resources, declaredExtensions);
+  const patchResult = applyDeclaredPatches(declDiscovered.resources, declaredExtensions);
+  declarativeFull = patchResult.resources;
+  jsonSchemaFields = patchResult.jsonSchemaFields;
   declarativeSpiceDB = generateSpiceDB(declarativeFull);
+  declarativeJsonSchemas = generateUnifiedJsonSchemas(declarativeFull, jsonSchemaFields);
 }, 30_000);
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -102,18 +110,30 @@ describe("Declarative extension discovery", () => {
     ]);
   });
 
-  it("each instance has 6 patch rules", () => {
+  it("each instance has 7 patch rules (role, roleBinding, workspace, jsonSchema)", () => {
     for (const ext of declaredExtensions) {
-      expect(ext.patchRules.length).toBe(6);
+      expect(ext.patchRules.length).toBe(7);
     }
   });
 
-  it("patch rules cover role, roleBinding, and workspace targets", () => {
+  it("patch rules cover role, roleBinding, workspace, and jsonSchema targets", () => {
     for (const ext of declaredExtensions) {
       const targets = new Set(ext.patchRules.map((r) => r.target));
       expect(targets.has("role")).toBe(true);
       expect(targets.has("roleBinding")).toBe(true);
       expect(targets.has("workspace")).toBe(true);
+      expect(targets.has("jsonSchema")).toBe(true);
+    }
+  });
+
+  it("workspace accumulate rule replaces hardcoded viewMetadataAccumulator", () => {
+    for (const ext of declaredExtensions) {
+      const accRule = ext.patchRules.find(
+        (r) => r.target === "workspace" && r.patchType === "accumulate",
+      );
+      expect(accRule).toBeDefined();
+      expect(accRule!.rawValue).toContain("view_metadata=or({v2})");
+      expect(accRule!.rawValue).toContain("when={verb}==read");
     }
   });
 });
@@ -256,7 +276,7 @@ describe("Declarative extension: enriched model semantics", () => {
     expect(viewMeta?.isPublic).toBe(true);
   });
 
-  it("view_metadata only accumulates read-verb extensions", () => {
+  it("view_metadata only accumulates read-verb extensions (via generic accumulate)", () => {
     const ws = declarativeFull.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
     const viewMeta = ws.relations.find((r) => r.name === "view_metadata")!;
 
@@ -271,5 +291,56 @@ describe("Declarative extension: enriched model semantics", () => {
         "remediations_remediation_view",
       ]);
     }
+  });
+});
+
+// ─── JSON Schema patch tests ─────────────────────────────────────────
+
+describe("Declarative extension: JSON Schema field patches", () => {
+  it("collects JSON Schema fields from extension instances", () => {
+    expect(jsonSchemaFields.length).toBeGreaterThan(0);
+  });
+
+  it("produces one field per extension instance (4 extensions = 4 fields)", () => {
+    expect(jsonSchemaFields).toHaveLength(4);
+  });
+
+  it("field names are interpolated from v2Perm", () => {
+    const names = jsonSchemaFields.map((f) => f.fieldName).sort();
+    expect(names).toEqual([
+      "inventory_host_update_id",
+      "inventory_host_view_id",
+      "remediations_remediation_update_id",
+      "remediations_remediation_view_id",
+    ]);
+  });
+
+  it("fields have correct type and format", () => {
+    for (const field of jsonSchemaFields) {
+      expect(field.fieldType).toBe("string");
+      expect(field.format).toBe("uuid");
+      expect(field.required).toBe(true);
+    }
+  });
+
+  it("JSON Schema output includes extension-declared fields on service resources", () => {
+    const hostSchema = declarativeJsonSchemas["inventorydecl/host"];
+    expect(hostSchema).toBeDefined();
+    expect(hostSchema.properties["inventory_host_view_id"]).toBeDefined();
+    expect(hostSchema.properties["inventory_host_view_id"].type).toBe("string");
+    expect(hostSchema.properties["inventory_host_view_id"].format).toBe("uuid");
+    expect(hostSchema.properties["inventory_host_view_id"].source).toBe("extension-declared");
+  });
+
+  it("extension-declared required fields appear in the required array", () => {
+    const hostSchema = declarativeJsonSchemas["inventorydecl/host"];
+    expect(hostSchema.required).toContain("inventory_host_view_id");
+    expect(hostSchema.required).toContain("inventory_host_update_id");
+  });
+
+  it("relation-derived fields (workspace_id) still present alongside extension fields", () => {
+    const hostSchema = declarativeJsonSchemas["inventorydecl/host"];
+    expect(hostSchema.properties["workspace_id"]).toBeDefined();
+    expect(hostSchema.required).toContain("workspace_id");
   });
 });

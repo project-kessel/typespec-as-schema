@@ -464,7 +464,17 @@ export interface UnifiedJsonSchema {
   required: string[];
 }
 
-export function generateUnifiedJsonSchemas(resources: ResourceDef[]): Record<string, UnifiedJsonSchema> {
+export interface JsonSchemaExtraField {
+  fieldName: string;
+  fieldType: string;
+  format?: string;
+  required: boolean;
+}
+
+export function generateUnifiedJsonSchemas(
+  resources: ResourceDef[],
+  extraFields?: JsonSchemaExtraField[],
+): Record<string, UnifiedJsonSchema> {
   const schemas: Record<string, UnifiedJsonSchema> = {};
 
   for (const res of resources) {
@@ -492,6 +502,19 @@ export function generateUnifiedJsonSchemas(resources: ResourceDef[]): Record<str
           source: `relation ${rel.name}: ${rel.body.target} [ExactlyOne]`,
         };
         schema.required.push(idField);
+        hasContent = true;
+      }
+    }
+
+    if (extraFields) {
+      for (const field of extraFields) {
+        const prop: { type: string; format?: string; source?: string } = {
+          type: field.fieldType,
+          source: "extension-declared",
+        };
+        if (field.format) prop.format = field.format;
+        schema.properties[field.fieldName] = prop;
+        if (field.required) schema.required.push(field.fieldName);
         hasContent = true;
       }
     }

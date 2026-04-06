@@ -7,13 +7,18 @@
 // Patch-rule property naming convention:
 //   {target}_{patchType}
 //
-//   target:    role | roleBinding | workspace
-//   patchType: boolRelations | permission | viewMetadataAccumulator
+//   target:    role | roleBinding | workspace | jsonSchema
+//   patchType: boolRelations | permission | public | accumulate | addField
 //
 // Patch-rule syntax:
-//   boolRelations:          comma-separated names to add as BoolRelation<Principal>
-//   permission:             name=body  where body uses | for union, & for intersect, -> for subreference
-//   viewMetadataAccumulator: "read"  (verb that triggers view_metadata accumulation)
+//   boolRelations:  comma-separated names to add as BoolRelation<Principal>
+//   permission:     name=body  (body uses | for union, & for intersect, -> for subreference)
+//   public:         comma-separated permission names to mark as public
+//   accumulate:     name=op(ref),when=condition,public=bool
+//                   Collects refs across all extension instances, merges with op.
+//                   "when" gates on a param equality check ({param}==value).
+//   addField:       name=type:format,required=bool
+//                   Adds a field to JSON Schema output for the extension's service.
 //
 // Placeholders: {app}, {res}, {verb}, {v2} are interpolated from the template params.
 
@@ -47,6 +52,9 @@ model V1WorkspacePermission<
   // Mark workspace permission as public
   workspace_public: "{v2}";
 
-  // Which verb triggers view_metadata accumulation
-  workspace_viewMetadataAccumulator: "read";
+  // Accumulate read-verb permissions into workspace.view_metadata (OR)
+  workspace_accumulate: "view_metadata=or({v2}),when={verb}==read,public=true";
+
+  // Extension-generated writable relation → JSON Schema field on the service resource
+  jsonSchema_addField: "{v2}_id=string:uuid,required=true";
 }

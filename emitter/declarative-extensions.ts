@@ -5,7 +5,10 @@
 // hardcoded buildSchemaFromTypeGraph().
 //
 // The patch rules live in TypeSpec (owned by the RBAC team) via the
-// kessel-extensions.tsp library. This emitter code is extension-agnostic.
+// kessel-extensions.tsp library. This emitter code is extension-agnostic:
+// it knows how to parse patch-rule syntax (boolRelations, permission,
+// public, accumulate, addField) but has zero knowledge of specific
+// extension patterns like workspace_permission or view_metadata.
 
 import type { Program, Model, Type, Namespace } from "@typespec/compiler";
 import { isTemplateInstance } from "@typespec/compiler";
@@ -20,9 +23,92 @@ export interface DeclaredExtension {
 }
 
 export interface PatchRule {
-  target: string;       // "role" | "roleBinding" | "workspace"
-  patchType: string;    // "boolRelations" | "permission" | "public" | "viewMetadataAccumulator"
+  target: string;       // "role" | "roleBinding" | "workspace" | "jsonSchema"
+  patchType: string;    // "boolRelations" | "permission" | "public" | "accumulate" | "addField"
   rawValue: string;     // template with {app}, {res}, {verb}, {v2} placeholders
+}
+
+// ─── Accumulate Rule ─────────────────────────────────────────────────
+
+export interface AccumulateRule {
+  name: string;         // target relation name (e.g., "view_metadata")
+  op: string;           // merge operator (e.g., "or")
+  ref: string;          // per-instance ref template (e.g., "{v2}")
+  condition?: {         // optional gate (e.g., {verb}==read)
+    param: string;      // param placeholder (e.g., "{verb}")
+    value: string;      // required value (e.g., "read")
+  };
+  isPublic?: boolean;
+}
+
+export function parseAccumulateRule(raw: string): AccumulateRule | null {
+  // Format: "name=op(ref),when=condition,public=bool"
+  // Example: "view_metadata=or({v2}),when={verb}==read,public=true"
+  const parts = raw.split(",").map((p) => p.trim());
+  if (parts.length === 0) return null;
+
+  // First part: name=op(ref)
+  const defMatch = parts[0].match(/^(\w+)=(\w+)\(([^)]+)\)$/);
+  if (!defMatch) return null;
+
+  const rule: AccumulateRule = {
+    name: defMatch[1],
+    op: defMatch[2],
+    ref: defMatch[3],
+  };
+
+  for (let i = 1; i < parts.length; i++) {
+    const kv = parts[i];
+    if (kv.startsWith("when=")) {
+      const cond = kv.slice(5); // e.g., "{verb}==read"
+      const eqIdx = cond.indexOf("==");
+      if (eqIdx !== -1) {
+        rule.condition = {
+          param: cond.slice(0, eqIdx),
+          value: cond.slice(eqIdx + 2),
+        };
+      }
+    } else if (kv.startsWith("public=")) {
+      rule.isPublic = kv.slice(7) === "true";
+    }
+  }
+
+  return rule;
+}
+
+// ─── JSON Schema Field Rule ──────────────────────────────────────────
+
+export interface JsonSchemaFieldRule {
+  fieldName: string;
+  fieldType: string;
+  format?: string;
+  required: boolean;
+}
+
+export function parseJsonSchemaFieldRule(raw: string): JsonSchemaFieldRule | null {
+  // Format: "name=type:format,required=bool"
+  // Example: "inventory_host_view_id=string:uuid,required=true"
+  const parts = raw.split(",").map((p) => p.trim());
+  if (parts.length === 0) return null;
+
+  // First part: name=type[:format]
+  const defMatch = parts[0].match(/^([\w{}]+)=([\w]+)(?::([\w]+))?$/);
+  if (!defMatch) return null;
+
+  const rule: JsonSchemaFieldRule = {
+    fieldName: defMatch[1],
+    fieldType: defMatch[2],
+    format: defMatch[3],
+    required: false,
+  };
+
+  for (let i = 1; i < parts.length; i++) {
+    if (parts[i].startsWith("required=")) {
+      rule.required = parts[i].slice(9) === "true";
+    }
+  }
+
+  return rule;
 }
 
 // ─── Discovery ───────────────────────────────────────────────────────
@@ -64,7 +150,7 @@ function isInstanceOfTemplate(model: Model, template: Model): boolean {
 }
 
 const PARAM_NAMES = ["application", "resource", "verb", "v2Perm"] as const;
-const PATCH_TARGETS = ["role", "roleBinding", "workspace"] as const;
+const PATCH_TARGETS = ["role", "roleBinding", "workspace", "jsonSchema"] as const;
 
 export function discoverDeclaredExtensions(program: Program): DeclaredExtension[] {
   const template = findExtensionTemplate(program, "V1WorkspacePermission");
@@ -150,70 +236,122 @@ function parsePermissionRule(value: string): RelationDef | null {
   return { name, body };
 }
 
+// ─── Result Types ────────────────────────────────────────────────────
+
+export interface DeclaredPatchResult {
+  resources: ResourceDef[];
+  jsonSchemaFields: JsonSchemaFieldRule[];
+}
+
 // ─── Application ─────────────────────────────────────────────────────
 
 export function applyDeclaredPatches(
   resources: ResourceDef[],
   extensions: DeclaredExtension[],
-): ResourceDef[] {
+): DeclaredPatchResult {
   const roleExtra: RelationDef[] = [];
   const roleBindingExtra: RelationDef[] = [];
   const workspaceExtra: RelationDef[] = [];
   const publicPerms = new Set<string>();
-  const viewMetadataMembers: string[] = [];
   const addedBoolPerms = new Set<string>();
+
+  // Two-pass accumulators: keyed by "target/name" (e.g., "workspace/view_metadata")
+  const accumulators = new Map<string, { rule: AccumulateRule; refs: string[] }>();
+
+  // JSON Schema field patches
+  const jsonSchemaFields: JsonSchemaFieldRule[] = [];
+
+  // ── Pass 1: Collect per-instance patches and accumulator contributions ──
 
   for (const ext of extensions) {
     for (const rule of ext.patchRules) {
       const value = interpolate(rule.rawValue, ext.params);
 
-      if (rule.target === "role" && rule.patchType === "boolRelations") {
-        for (const rel of parseBoolRelations(value)) {
-          if (!addedBoolPerms.has(rel.name)) {
-            addedBoolPerms.add(rel.name);
-            roleExtra.push(rel);
+      if (rule.patchType === "boolRelations") {
+        if (rule.target === "role") {
+          for (const rel of parseBoolRelations(value)) {
+            if (!addedBoolPerms.has(rel.name)) {
+              addedBoolPerms.add(rel.name);
+              roleExtra.push(rel);
+            }
           }
         }
-      } else if (rule.target === "role" && rule.patchType === "permission") {
+      } else if (rule.patchType === "permission") {
         const rel = parsePermissionRule(value);
-        if (rel) roleExtra.push(rel);
-      } else if (rule.target === "roleBinding" && rule.patchType === "permission") {
-        const rel = parsePermissionRule(value);
-        if (rel) roleBindingExtra.push(rel);
-      } else if (rule.target === "workspace" && rule.patchType === "permission") {
-        const rel = parsePermissionRule(value);
-        if (rel) {
+        if (!rel) continue;
+
+        if (rule.target === "role") roleExtra.push(rel);
+        else if (rule.target === "roleBinding") roleBindingExtra.push(rel);
+        else if (rule.target === "workspace") {
           rel.isPublic = publicPerms.has(rel.name);
           workspaceExtra.push(rel);
         }
-      } else if (rule.target === "workspace" && rule.patchType === "public") {
-        const permName = interpolate(rule.rawValue, ext.params);
-        publicPerms.add(permName);
-      } else if (rule.target === "workspace" && rule.patchType === "viewMetadataAccumulator") {
-        if (ext.params.verb === value) {
-          viewMetadataMembers.push(ext.params.v2Perm);
+      } else if (rule.patchType === "public") {
+        publicPerms.add(value);
+      } else if (rule.patchType === "accumulate") {
+        const parsed = parseAccumulateRule(rule.rawValue);
+        if (!parsed) continue;
+
+        const key = `${rule.target}/${parsed.name}`;
+        if (!accumulators.has(key)) {
+          accumulators.set(key, { rule: parsed, refs: [] });
         }
+
+        const acc = accumulators.get(key)!;
+        const ref = interpolate(parsed.ref, ext.params);
+
+        if (parsed.condition) {
+          const paramValue = interpolate(parsed.condition.param, ext.params);
+          if (paramValue === parsed.condition.value) {
+            acc.refs.push(ref);
+          }
+        } else {
+          acc.refs.push(ref);
+        }
+      } else if (rule.target === "jsonSchema" && rule.patchType === "addField") {
+        const parsed = parseJsonSchemaFieldRule(value);
+        if (parsed) jsonSchemaFields.push(parsed);
       }
     }
   }
 
-  // Apply public flag retroactively
+  // Apply public flag retroactively to workspace permissions
   for (const rel of workspaceExtra) {
     if (publicPerms.has(rel.name)) {
       rel.isPublic = true;
     }
   }
 
-  if (viewMetadataMembers.length > 0) {
-    workspaceExtra.push({
-      name: "view_metadata",
-      body: {
+  // ── Pass 2: Emit accumulated relations ──
+
+  for (const [key, { rule, refs }] of accumulators) {
+    if (refs.length === 0) continue;
+
+    const target = key.split("/")[0];
+    let body: RelationBody;
+
+    if (rule.op === "or") {
+      body = {
         kind: "or",
-        members: viewMetadataMembers.map((m) => ({ kind: "ref" as const, name: m })),
-      },
-      isPublic: true,
-    });
+        members: refs.map((r) => ({ kind: "ref" as const, name: r })),
+      };
+    } else if (rule.op === "and") {
+      body = {
+        kind: "and",
+        members: refs.map((r) => ({ kind: "ref" as const, name: r })),
+      };
+    } else {
+      continue;
+    }
+
+    const rel: RelationDef = { name: rule.name, body, isPublic: rule.isPublic };
+
+    if (target === "workspace") workspaceExtra.push(rel);
+    else if (target === "role") roleExtra.push(rel);
+    else if (target === "roleBinding") roleBindingExtra.push(rel);
   }
+
+  // ── Build enriched resources ──
 
   const result: ResourceDef[] = [];
   for (const res of resources) {
@@ -236,5 +374,5 @@ export function applyDeclaredPatches(
     result.unshift({ name: "principal", namespace: "rbac", relations: [] });
   }
 
-  return result;
+  return { resources: result, jsonSchemaFields };
 }
