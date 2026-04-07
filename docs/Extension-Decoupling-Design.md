@@ -39,7 +39,7 @@ flowchart LR
 
 Replace the hardcoded `buildSchemaFromTypeGraph` with a generic patch applicator that reads structured patch declarations from TypeSpec models.
 
-The RBAC team defines an `ExtensionTemplate` model where patch rules are expressed as structured TypeSpec properties:
+The RBAC team defines an `ExtensionTemplate` model where patch rules are expressed as structured TypeSpec properties. Property names follow the `{target}_{patchType}` convention where `target` is the resource to patch and `patchType` determines how the patch is applied:
 
 ```typespec
 model V1WorkspacePermission<App extends string, Res extends string, Verb extends string, V2 extends string> {
@@ -48,23 +48,48 @@ model V1WorkspacePermission<App extends string, Res extends string, Verb extends
   verb: Verb;
   v2Perm: V2;
 
-  role_boolRelations: "${App}_any_any,${App}_${Res}_any,${App}_any_${Verb},${App}_${Res}_${Verb}";
-  role_permission: "${V2}=any_any_any|${App}_any_any|${App}_${Res}_any|${App}_any_${Verb}|${App}_${Res}_${Verb}";
-  roleBinding_permission: "${V2}=subject&granted->${V2}";
-  workspace_permission: "${V2}=binding->${V2}|parent->${V2}";
+  // Per-instance patches: applied once per extension invocation
+  role_boolRelations: "{app}_any_any,{app}_{res}_any,{app}_any_{verb},{app}_{res}_{verb}";
+  role_permission: "{v2}=any_any_any | {app}_any_any | {app}_{res}_any | {app}_any_{verb} | {app}_{res}_{verb}";
+  roleBinding_permission: "{v2}=subject & granted->{v2}";
+  workspace_permission: "{v2}=binding->{v2} | parent->{v2}";
+  workspace_public: "{v2}";
+
+  // Cross-instance accumulation: collected across ALL invocations, then merged
+  workspace_accumulate: "view_metadata=or({v2}),when={verb}==read,public=true";
+
+  // JSON Schema: extension-generated fields flow through to schema output
+  jsonSchema_addField: "{v2}_id=string:uuid,required=true";
 }
 ```
 
+#### Patch types
+
+| Patch type | Syntax | Semantics |
+|-----------|--------|-----------|
+| `boolRelations` | comma-separated names | Add `BoolRelation<Principal>` entries (deduped) |
+| `permission` | `name=body` | Add a computed permission (body uses `\|` for OR, `&` for AND, `->` for subreference) |
+| `public` | comma-separated names | Mark listed permissions as public |
+| `accumulate` | `name=op(ref),when=cond,public=bool` | Two-pass: collect `ref` across all instances where `cond` holds, merge with `op` |
+| `addField` | `name=type:format,required=bool` | Add a field to JSON Schema output for service resources |
+
+The `accumulate` type is the key generalization. Rather than hardcoding `view_metadata` logic in the emitter, the template declares: "collect `{v2}` from every instance where `{verb}==read`, OR them together into a relation called `view_metadata`, mark it public." The emitter's generic two-pass loop handles this with zero knowledge of what `view_metadata` is.
+
+The `addField` type extends the pipeline to JSON Schema output. Extension-generated writable relations (like permission IDs) can be declared as JSON Schema fields in the template. The custom emitter applies them to all non-RBAC resource schemas alongside the relation-derived fields.
+
 The emitter:
-1. Discovers template instances (same as today's `findV1PermissionTemplate`)
-2. Reads the `*_boolRelations`, `*_permission` properties as **patch declarations**
-3. Interpolates string type parameters into the declarations
-4. Applies patches generically to the target resources
+1. Discovers template instances via alias resolution in `program.sourceFiles`
+2. Reads patch-rule properties, splitting on the `{target}_{patchType}` naming convention
+3. **Pass 1**: Iterates all extension instances, applying per-instance patches and collecting accumulator contributions
+4. **Pass 2**: Emits accumulated relations (merges refs with the declared operator)
+5. Returns enriched `ResourceDef[]` + `JsonSchemaFieldRule[]` to downstream emitters
 
 ### Tradeoffs
 
 **Strengths:**
-- RBAC team owns the full extension definition in `.tsp` -- no emitter changes for new patterns
+- RBAC team owns the full extension definition in `.tsp` -- no emitter changes for new patterns or accumulation rules
+- Cross-instance patterns (like `view_metadata`) are declared as data, not code
+- Extension-generated fields flow through to JSON Schema via `jsonSchema_addField`
 - IDE support for authoring (TypeSpec IntelliSense on the template model)
 - Single language, single compilation step
 
@@ -72,7 +97,7 @@ The emitter:
 - TypeSpec can't enforce patch semantics at compile time -- the patch DSL is convention
 - String interpolation is emitter-side (TypeSpec string literal types don't support runtime interpolation)
 - Extension expansion still lives in Node.js; Go consumers receive post-expansion output
-- Does not solve Q1 (Go-native in-memory model) or Q3 (JSON Schema reflection of extensions through a shared model)
+- Does not solve Q1 (Go-native in-memory model)
 
 ---
 
@@ -158,7 +183,7 @@ Build **Option A** as a comparison point to show what pure-TypeSpec looks like.
 
 ## Comparison
 
-Both POCs are implemented and tested. All 128 tests pass (88 original + 12 KSL IR unit + 9 KSL IR integration + 19 declarative equivalence).
+Both POCs are implemented and tested. All 145 tests pass (88 original + 12 KSL IR unit + 9 KSL IR integration + 27 declarative equivalence + 9 parser unit tests).
 
 ### Quantitative Metrics
 
@@ -171,7 +196,7 @@ Both POCs are implemented and tested. All 128 tests pass (88 original + 12 KSL I
 | Language for extensions | TypeScript | TypeSpec string-literal DSL | KSL |
 | Runtime dependency | Node.js | Node.js | Go (after build) |
 | Go-native model at runtime | No | No | Yes |
-| Extension-generated fields in JSON Schema | No (emitter-side only) | No (same limitation) | Yes (via KSL semantic model) |
+| Extension-generated fields in JSON Schema | No (emitter-side only) | Yes (via `jsonSchema_addField`) | Yes (via KSL semantic model) |
 
 ### Qualitative Comparison
 
@@ -194,14 +219,16 @@ Both POCs are implemented and tested. All 128 tests pass (88 original + 12 KSL I
 
 1. **Q1 (Go-native model)**: Only Option B provides a Go-native in-memory model. Option A still requires Node.js at runtime.
 
-2. **Q3 (JSON Schema reflection)**: Only Option B can reflect extension-generated writable relations in JSON Schema, because extensions patch the shared semantic model that all emitters (including JSON Schema) consume. Option A's extensions enrich the `ResourceDef[]` array, but this happens in a Node.js pipeline that doesn't feed back into TypeSpec's `@jsonSchema` emitter.
+2. **Q3 (JSON Schema reflection)**: Both options now support extension-generated fields in JSON Schema, via different mechanisms. Option A uses `jsonSchema_addField` patches declared in the TypeSpec template; the custom JSON Schema emitter reads these from the enriched model. Option B uses KSL's semantic model where all Go-side emitters (including JSON Schema) see extension-created relations. The difference: Option A declares fields explicitly in the template; Option B derives them automatically from the semantic model.
 
-3. **Single-language simplicity**: Option A keeps everything in TypeSpec + TypeScript. Option B requires two languages (TypeSpec for data models, KSL for authorization).
+3. **Accumulation patterns**: Both handle cross-instance patterns like `view_metadata`. Option A uses the generic `accumulate` patch type (`view_metadata=or({v2}),when={verb}==read`); CUE uses unification + comprehension; KSL uses `extension.Apply()`. Option A's approach is the most explicit (you can read the rule and know exactly what it does) but least validated at compile time.
 
-4. **Compile-time safety**: Option A's patch rules are string-literal conventions — the TypeSpec compiler can't validate them. Option B's `.ksl` files are parsed and validated by the KSL compiler.
+4. **Single-language simplicity**: Option A keeps everything in TypeSpec + TypeScript. Option B requires two languages (TypeSpec for data models, KSL for authorization).
 
-### Recommendation (unchanged)
+5. **Compile-time safety**: Option A's patch rules are string-literal conventions -- the TypeSpec compiler can't validate them. Option B's `.ksl` files are parsed and validated by the KSL compiler.
 
-**Option B** is the stronger solution for the schema-unify use case. It solves all three original questions and leverages existing, tested infrastructure on both sides. The two-language cost is justified by the architectural benefits: full decoupling, Go-native models, and JSON Schema reflection.
+### Recommendation (updated)
 
-**Option A** is useful as a fallback for teams that want to stay within a single TypeSpec compilation step, accepting that extension-generated fields won't appear in JSON Schema and Go consumers need Node.js in their build pipeline.
+**Option B** remains the stronger solution when a Go-native runtime model is required. It provides automatic JSON Schema reflection (fields derived from the semantic model, not manually declared) and leverages validated KSL extension definitions.
+
+**Option A** is now a viable alternative for teams that prioritize single-language simplicity and are willing to use a custom JSON Schema emitter. With the generalized `accumulate` and `jsonSchema_addField` patch types, the RBAC team can define new extension patterns, accumulation rules, and JSON Schema side-effects entirely in TypeSpec -- zero emitter changes required. The tradeoff is that JSON Schema fields must be declared explicitly in the template rather than derived automatically.
