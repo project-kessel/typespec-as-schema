@@ -5,10 +5,11 @@
   "main": "index.js",
   "scripts": {
     "test": "vitest run",
-    "emit:spicedb": "tsx emitter/spicedb-emitter.ts main.tsp",
-    "emit:ir": "tsx emitter/spicedb-emitter.ts main.tsp --ir go-consumer/schema/resources.json",
-    "emit:ksl-ir": "tsx emitter/spicedb-emitter.ts main.tsp --ksl-ir ksl-ir-output",
-    "emit:metadata": "tsx emitter/spicedb-emitter.ts main.tsp --metadata"
+    "compile": "tsp compile schema/main.tsp",
+    "emit:spicedb": "tsx src/spicedb-emitter.ts schema/main.tsp",
+    "emit:ir": "tsx src/spicedb-emitter.ts schema/main.tsp --ir go-consumer/schema/resources.json",
+    "emit:ksl-ir": "tsx src/spicedb-emitter.ts schema/main.tsp --ksl-ir ksl-ir-output",
+    "emit:metadata": "tsx src/spicedb-emitter.ts schema/main.tsp --metadata"
   },
   "keywords": [],
   "author": "",

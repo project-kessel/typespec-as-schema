@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "generatedAt": "2026-04-01T18:42:18.659Z",
-  "source": "/Users/akoserwa/schema-unify/poc/typespec-as-schema/main.tsp",
+  "generatedAt": "2026-04-09T18:14:31.016Z",
+  "source": "/Users/akoserwa/schema-unify/poc/typespec-as-schema/schema/main.tsp",
   "resources": [
     {
       "name": "principal",
@@ -234,7 +234,7 @@
           "body": {
             "kind": "assignable",
             "target": "rbac/role",
-            "cardinality": "Any"
+            "cardinality": "AtLeastOne"
           }
         },
         {
@@ -316,7 +316,7 @@
           "body": {
             "kind": "assignable",
             "target": "rbac/workspace",
-            "cardinality": "Any"
+            "cardinality": "AtMostOne"
           }
         },
         {
@@ -431,7 +431,7 @@
           "body": {
             "kind": "assignable",
             "target": "rbac/workspace",
-            "cardinality": "Any"
+            "cardinality": "ExactlyOne"
           }
         },
         {
@@ -498,5 +498,45 @@
       "resources": []
     }
   },
-  "jsonSchemas": {}
+  "jsonSchemas": {
+    "inventory/host": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "inventory/host",
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string",
+          "format": "uuid",
+          "source": "relation workspace: rbac/workspace [ExactlyOne]"
+        },
+        "inventory_host_view_id": {
+          "type": "string",
+          "source": "extension-declared",
+          "format": "uuid"
+        },
+        "inventory_host_update_id": {
+          "type": "string",
+          "source": "extension-declared",
+          "format": "uuid"
+        },
+        "remediations_remediation_view_id": {
+          "type": "string",
+          "source": "extension-declared",
+          "format": "uuid"
+        },
+        "remediations_remediation_update_id": {
+          "type": "string",
+          "source": "extension-declared",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "inventory_host_view_id",
+        "inventory_host_update_id",
+        "remediations_remediation_view_id",
+        "remediations_remediation_update_id"
+      ]
+    }
+  }
 }

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import * as path from "path";
 import { fileURLToPath } from "url";
-import { compileAndDiscover } from "../../emitter/lib.js";
-import { generateKslIR } from "../../emitter/ksl-ir-emitter.js";
+import { compileAndDiscover } from "../../src/lib.js";
+import { generateKslIR } from "../../src/ksl-ir-emitter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pocRoot = path.resolve(__dirname, "../..");
-const mainTsp = path.resolve(pocRoot, "main.tsp");
+const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
 const kslSamplesDir = path.resolve(pocRoot, "../ksl-schema-language/samples");
 
 interface KslNamespace {

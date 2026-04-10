@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { generateKslIR } from "../../emitter/ksl-ir-emitter.js";
-import type { ResourceDef, V1Extension } from "../../emitter/lib.js";
+import { generateKslIR } from "../../src/ksl-ir-emitter.js";
+import type { ResourceDef, V1Extension } from "../../src/lib.js";
 
 const sampleResources: ResourceDef[] = [
   {

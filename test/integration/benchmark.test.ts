@@ -4,17 +4,16 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import {
   compileAndDiscover,
-  buildSchemaFromTypeGraph,
   generateSpiceDB,
   generateMetadata,
-  generateUnifiedJsonSchemas,
   type ResourceDef,
   type V1Extension,
-} from "../../emitter/lib.js";
+} from "../../src/lib.js";
+import { expandSchemaWithExtensions } from "../../src/pipeline.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pocRoot = path.resolve(__dirname, "../..");
-const mainTsp = path.resolve(pocRoot, "main.tsp");
+const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
 const goldenDir = path.resolve(pocRoot, "../../evaluation/golden-outputs");
 
 // Shared state populated by beforeAll
@@ -27,7 +26,11 @@ beforeAll(async () => {
   const discovered = await compileAndDiscover(mainTsp);
   resources = discovered.resources;
   extensions = discovered.extensions;
-  fullSchema = buildSchemaFromTypeGraph(resources, extensions);
+  const { fullSchema: expanded } = expandSchemaWithExtensions(
+    discovered.program,
+    resources,
+  );
+  fullSchema = expanded;
   spicedbOutput = generateSpiceDB(fullSchema);
 }, 30_000);
 
@@ -194,7 +197,7 @@ describe("M1: Feature Coverage", () => {
     expect(namespaces.has("inventory")).toBe(true);
   });
 
-  it("V1BasedPermission extension mechanism discovers extensions from aliases", () => {
+  it("V1WorkspacePermission extension mechanism discovers extensions from aliases", () => {
     expect(extensions.length).toBeGreaterThanOrEqual(4);
     expect(extensions.some((e) => e.v2Perm === "inventory_host_view")).toBe(true);
     expect(extensions.some((e) => e.v2Perm === "inventory_host_update")).toBe(true);

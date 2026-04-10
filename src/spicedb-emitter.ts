@@ -9,18 +9,18 @@
 //   - Workspace binding is "binding"
 //   - view_metadata accumulates all read-verb v2 permissions
 //
-// Usage: npx tsx emitter/spicedb-emitter.ts [main.tsp] [--metadata] [--ir [outpath]] [--ksl-ir [outdir]]
+// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--ksl-ir [outdir]]
 
 import * as fs from "fs";
 import {
   compileAndDiscover,
-  buildSchemaFromTypeGraph,
   generateSpiceDB,
   generateMetadata,
   generateUnifiedJsonSchemas,
   generateIR,
   path,
 } from "./lib.js";
+import { expandSchemaWithExtensions } from "./pipeline.js";
 import { generateKslIR } from "./ksl-ir-emitter.js";
 
 async function main() {
@@ -29,15 +29,21 @@ async function main() {
   const emitUnifiedJsonSchema = args.includes("--unified-jsonschema");
   const emitIR = args.includes("--ir");
   const emitKslIR = args.includes("--ksl-ir");
-  const mainFile = args.find((a) => !a.startsWith("--")) || path.resolve(import.meta.dirname ?? ".", "../main.tsp");
+  const mainFile =
+    args.find((a) => !a.startsWith("--")) ||
+    path.resolve(import.meta.dirname ?? ".", "../schema/main.tsp");
   const resolvedMain = path.resolve(mainFile);
 
   console.error(`Compiling ${resolvedMain}...`);
 
-  const { resources, extensions } = await compileAndDiscover(resolvedMain);
+  const { resources, extensions, program } = await compileAndDiscover(resolvedMain);
+  const { fullSchema, jsonSchemaFields } = expandSchemaWithExtensions(
+    program,
+    resources,
+  );
 
   console.error(
-    `Discovered ${resources.length} resources and ${extensions.length} V1BasedPermission extensions from type graph.`
+    `Discovered ${resources.length} resources, ${extensions.length} V1WorkspacePermission extensions, expanded to ${fullSchema.length} resource defs.`
   );
 
   if (emitKslIR) {
@@ -60,18 +66,22 @@ async function main() {
     const outPath = nextArg && !nextArg.startsWith("--")
       ? nextArg
       : path.resolve(import.meta.dirname ?? ".", "../go-consumer/resources.json");
-    const ir = generateIR(resolvedMain, resources, extensions);
+    const ir = generateIR(
+      resolvedMain,
+      fullSchema,
+      extensions,
+      jsonSchemaFields,
+    );
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(outPath, JSON.stringify(ir, null, 2) + "\n");
     console.error(`Wrote IR to ${outPath}`);
   } else if (emitMetadata) {
-    const metadata = generateMetadata(resources, extensions);
+    const metadata = generateMetadata(fullSchema, extensions);
     console.log(JSON.stringify(metadata, null, 2));
   } else if (emitUnifiedJsonSchema) {
-    const schemas = generateUnifiedJsonSchemas(resources);
+    const schemas = generateUnifiedJsonSchemas(fullSchema, jsonSchemaFields);
     console.log(JSON.stringify(schemas, null, 2));
   } else {
-    const fullSchema = buildSchemaFromTypeGraph(resources, extensions);
     const output = generateSpiceDB(fullSchema);
 
     console.log("// Generated SpiceDB/Zed Schema from TypeSpec type graph");

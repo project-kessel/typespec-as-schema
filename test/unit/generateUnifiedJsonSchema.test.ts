@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateUnifiedJsonSchemas, type ResourceDef } from "../../emitter/lib.js";
+import { generateUnifiedJsonSchemas, type ResourceDef } from "../../src/lib.js";
 
 describe("generateUnifiedJsonSchemas", () => {
   it("generates _id field for ExactlyOne assignable relation", () => {

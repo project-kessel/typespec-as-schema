@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bodyToZed } from "../../emitter/lib.js";
+import { bodyToZed } from "../../src/lib.js";
 
 describe("bodyToZed", () => {
   it("renders assignable as target name", () => {

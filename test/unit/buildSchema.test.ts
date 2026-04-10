@@ -4,7 +4,7 @@ import {
   type ResourceDef,
   type V1Extension,
   type RelationBody,
-} from "../../emitter/lib.js";
+} from "../../src/lib.js";
 
 function makeBaseRbacResources(): ResourceDef[] {
   return [

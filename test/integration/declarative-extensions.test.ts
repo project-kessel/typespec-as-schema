@@ -1,55 +1,44 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import * as path from "path";
 import { fileURLToPath } from "url";
-import { compile, NodeHost } from "@typespec/compiler";
 import {
-  discoverResources,
+  compileAndDiscover,
   buildSchemaFromTypeGraph,
   generateSpiceDB,
   generateUnifiedJsonSchemas,
   type ResourceDef,
-  type V1Extension,
   type UnifiedJsonSchema,
-} from "../../emitter/lib.js";
+  type V1Extension,
+} from "../../src/lib.js";
 import {
   discoverDeclaredExtensions,
-  applyDeclaredPatches,
   type DeclaredExtension,
   type JsonSchemaFieldRule,
-} from "../../emitter/declarative-extensions.js";
+} from "../../src/declarative-extensions.js";
+import { expandSchemaWithExtensions } from "../../src/pipeline.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pocRoot = path.resolve(__dirname, "../..");
+const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
 
-// Compile the original (hardcoded) approach
-const mainOriginal = path.resolve(pocRoot, "main.tsp");
-// Compile the declarative approach
-const mainDeclarative = path.resolve(pocRoot, "main-declarative.tsp");
-
-let hardcodedSpiceDB: string;
-let declarativeSpiceDB: string;
-let hardcodedFull: ResourceDef[];
-let declarativeFull: ResourceDef[];
+let fullSchema: ResourceDef[];
+let spicedbOutput: string;
 let declaredExtensions: DeclaredExtension[];
 let jsonSchemaFields: JsonSchemaFieldRule[];
-let declarativeJsonSchemas: Record<string, UnifiedJsonSchema>;
+let unifiedJsonSchemas: Record<string, UnifiedJsonSchema>;
+let resources: ResourceDef[];
+let extensions: V1Extension[];
 
 beforeAll(async () => {
-  // 1. Hardcoded approach: compile main.tsp, apply buildSchemaFromTypeGraph
-  const origProgram = await compile(NodeHost, mainOriginal, { noEmit: true });
-  const origDiscovered = discoverResources(origProgram);
-  hardcodedFull = buildSchemaFromTypeGraph(origDiscovered.resources, origDiscovered.extensions);
-  hardcodedSpiceDB = generateSpiceDB(hardcodedFull);
-
-  // 2. Declarative approach: compile main-declarative.tsp, discover patches, apply generically
-  const declProgram = await compile(NodeHost, mainDeclarative, { noEmit: true });
-  const declDiscovered = discoverResources(declProgram);
-  declaredExtensions = discoverDeclaredExtensions(declProgram);
-  const patchResult = applyDeclaredPatches(declDiscovered.resources, declaredExtensions);
-  declarativeFull = patchResult.resources;
-  jsonSchemaFields = patchResult.jsonSchemaFields;
-  declarativeSpiceDB = generateSpiceDB(declarativeFull);
-  declarativeJsonSchemas = generateUnifiedJsonSchemas(declarativeFull, jsonSchemaFields);
+  const discovered = await compileAndDiscover(mainTsp);
+  resources = discovered.resources;
+  extensions = discovered.extensions;
+  declaredExtensions = discoverDeclaredExtensions(discovered.program);
+  const expanded = expandSchemaWithExtensions(discovered.program, resources);
+  fullSchema = expanded.fullSchema;
+  jsonSchemaFields = expanded.jsonSchemaFields;
+  spicedbOutput = generateSpiceDB(fullSchema);
+  unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema, jsonSchemaFields);
 }, 30_000);
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -93,10 +82,24 @@ function parseZedDefinitions(zedText: string): Map<string, DefinitionBlock> {
   return blocks;
 }
 
+// ─── Regression: legacy expander ─────────────────────────────────────
+
+describe("expandSchemaWithExtensions vs buildSchemaFromTypeGraph", () => {
+  it("produces the same ResourceDef graph as the legacy hardcoded expander", () => {
+    const legacy = buildSchemaFromTypeGraph(resources, extensions);
+    expect(fullSchema).toEqual(legacy);
+  });
+
+  it("produces identical SpiceDB text to the legacy expander", () => {
+    const legacy = buildSchemaFromTypeGraph(resources, extensions);
+    expect(generateSpiceDB(fullSchema)).toBe(generateSpiceDB(legacy));
+  });
+});
+
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
 describe("Declarative extension discovery", () => {
-  it("discovers 4 V1WorkspacePermission instances from main-declarative.tsp", () => {
+  it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
     expect(declaredExtensions).toHaveLength(4);
   });
 
@@ -126,7 +129,7 @@ describe("Declarative extension discovery", () => {
     }
   });
 
-  it("workspace accumulate rule replaces hardcoded viewMetadataAccumulator", () => {
+  it("workspace accumulate rule encodes view_metadata", () => {
     for (const ext of declaredExtensions) {
       const accRule = ext.patchRules.find(
         (r) => r.target === "workspace" && r.patchType === "accumulate",
@@ -138,115 +141,14 @@ describe("Declarative extension discovery", () => {
   });
 });
 
-// ─── Equivalence Tests ───────────────────────────────────────────────
+// ─── SpiceDB smoke ───────────────────────────────────────────────────
 
-describe("Declarative vs hardcoded: SpiceDB output equivalence", () => {
-  it("produces same number of definitions", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-    expect(declDefs.size).toBe(hardDefs.size);
-  });
-
-  it("produces same definition names (after namespace normalization)", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    const NAMESPACE_MAP: Record<string, string> = {
-      "inventorydecl/host": "inventory/host",
-    };
-
-    const hardNames = [...hardDefs.keys()].sort();
-    const declNames = [...declDefs.keys()].map((n) => NAMESPACE_MAP[n] ?? n).sort();
-    expect(declNames).toEqual(hardNames);
-  });
-
-  it("rbac/principal is empty in both", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    expect(hardDefs.get("rbac/principal")!.permissions).toHaveLength(0);
-    expect(declDefs.get("rbac/principal")!.permissions).toHaveLength(0);
-  });
-
-  it("rbac/role has identical permission count", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    expect(declDefs.get("rbac/role")!.permissions.length)
-      .toBe(hardDefs.get("rbac/role")!.permissions.length);
-  });
-
-  it("rbac/role has identical relation count", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    expect(declDefs.get("rbac/role")!.relations.length)
-      .toBe(hardDefs.get("rbac/role")!.relations.length);
-  });
-
-  it("rbac/role_binding has identical permissions (sorted)", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    const hardPerms = hardDefs.get("rbac/role_binding")!.permissions.map((p) => p.trim()).sort();
-    const declPerms = declDefs.get("rbac/role_binding")!.permissions.map((p) => p.trim()).sort();
-    expect(declPerms).toEqual(hardPerms);
-  });
-
-  it("rbac/workspace has identical permission count", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    expect(declDefs.get("rbac/workspace")!.permissions.length)
-      .toBe(hardDefs.get("rbac/workspace")!.permissions.length);
-  });
-
-  it("rbac/workspace has identical relation count", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    expect(declDefs.get("rbac/workspace")!.relations.length)
-      .toBe(hardDefs.get("rbac/workspace")!.relations.length);
-  });
-
-  it("rbac/workspace view_metadata ORs the same read-verb permissions", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    const hardVm = hardDefs.get("rbac/workspace")!.permissions.find((p) => p.includes("view_metadata"))!;
-    const declVm = declDefs.get("rbac/workspace")!.permissions.find((p) => p.includes("view_metadata"))!;
-
-    expect(declVm).toContain("inventory_host_view");
-    expect(declVm).toContain("remediations_remediation_view");
-    expect(hardVm).toContain("inventory_host_view");
-    expect(hardVm).toContain("remediations_remediation_view");
-  });
-
-  it("rbac/workspace permission lines match (sorted, ignoring namespace prefix differences)", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    const hardPerms = hardDefs.get("rbac/workspace")!.permissions.map((p) => p.trim()).sort();
-    const declPerms = declDefs.get("rbac/workspace")!.permissions.map((p) => p.trim()).sort();
-    expect(declPerms).toEqual(hardPerms);
-  });
-
-  it("rbac/role permission lines match (sorted)", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    const hardPerms = hardDefs.get("rbac/role")!.permissions.map((p) => p.trim()).sort();
-    const declPerms = declDefs.get("rbac/role")!.permissions.map((p) => p.trim()).sort();
-    expect(declPerms).toEqual(hardPerms);
-  });
-
-  it("rbac/role relation lines match (sorted)", () => {
-    const hardDefs = parseZedDefinitions(hardcodedSpiceDB);
-    const declDefs = parseZedDefinitions(declarativeSpiceDB);
-
-    const hardRels = hardDefs.get("rbac/role")!.relations.map((r) => r.trim()).sort();
-    const declRels = declDefs.get("rbac/role")!.relations.map((r) => r.trim()).sort();
-    expect(declRels).toEqual(hardRels);
+describe("Declarative pipeline: SpiceDB output", () => {
+  it("rbac/workspace view_metadata ORs read-verb permissions", () => {
+    const defs = parseZedDefinitions(spicedbOutput);
+    const vm = defs.get("rbac/workspace")!.permissions.find((p) => p.includes("view_metadata"))!;
+    expect(vm).toContain("inventory_host_view");
+    expect(vm).toContain("remediations_remediation_view");
   });
 });
 
@@ -254,7 +156,7 @@ describe("Declarative vs hardcoded: SpiceDB output equivalence", () => {
 
 describe("Declarative extension: enriched model semantics", () => {
   it("role gets bool relations for each extension's hierarchy levels", () => {
-    const role = declarativeFull.find((r) => r.name === "role" && r.namespace === "rbac")!;
+    const role = fullSchema.find((r) => r.name === "role" && r.namespace === "rbac")!;
     const boolNames = role.relations
       .filter((r) => r.body.kind === "bool")
       .map((r) => r.name);
@@ -268,7 +170,7 @@ describe("Declarative extension: enriched model semantics", () => {
   });
 
   it("workspace permissions are marked public", () => {
-    const ws = declarativeFull.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
+    const ws = fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
     const invView = ws.relations.find((r) => r.name === "inventory_host_view");
     expect(invView?.isPublic).toBe(true);
 
@@ -277,7 +179,7 @@ describe("Declarative extension: enriched model semantics", () => {
   });
 
   it("view_metadata only accumulates read-verb extensions (via generic accumulate)", () => {
-    const ws = declarativeFull.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
+    const ws = fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
     const viewMeta = ws.relations.find((r) => r.name === "view_metadata")!;
 
     expect(viewMeta.body.kind).toBe("or");
@@ -324,7 +226,7 @@ describe("Declarative extension: JSON Schema field patches", () => {
   });
 
   it("JSON Schema output includes extension-declared fields on service resources", () => {
-    const hostSchema = declarativeJsonSchemas["inventorydecl/host"];
+    const hostSchema = unifiedJsonSchemas["inventory/host"];
     expect(hostSchema).toBeDefined();
     expect(hostSchema.properties["inventory_host_view_id"]).toBeDefined();
     expect(hostSchema.properties["inventory_host_view_id"].type).toBe("string");
@@ -333,13 +235,13 @@ describe("Declarative extension: JSON Schema field patches", () => {
   });
 
   it("extension-declared required fields appear in the required array", () => {
-    const hostSchema = declarativeJsonSchemas["inventorydecl/host"];
+    const hostSchema = unifiedJsonSchemas["inventory/host"];
     expect(hostSchema.required).toContain("inventory_host_view_id");
     expect(hostSchema.required).toContain("inventory_host_update_id");
   });
 
   it("relation-derived fields (workspace_id) still present alongside extension fields", () => {
-    const hostSchema = declarativeJsonSchemas["inventorydecl/host"];
+    const hostSchema = unifiedJsonSchemas["inventory/host"];
     expect(hostSchema.properties["workspace_id"]).toBeDefined();
     expect(hostSchema.required).toContain("workspace_id");
   });

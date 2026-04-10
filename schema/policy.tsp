@@ -3,6 +3,7 @@
 
 import "@typespec/json-schema";
 import "../lib/kessel.tsp";
+import "../lib/kessel-extensions.tsp";
 import "./rbac.tsp";
 
 using JsonSchema;
@@ -11,7 +12,7 @@ using Kessel;
 namespace Inventory;
 
 // Extension application
-alias policyViewPermission = RBAC.V1BasedPermission<
+alias policyViewPermission = Kessel.V1WorkspacePermission<
   "inventory",
   "policies",
   "read",

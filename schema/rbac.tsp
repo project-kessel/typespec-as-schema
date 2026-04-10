@@ -39,18 +39,5 @@ model Workspace {
   binding: Assignable<RoleBinding, Cardinality.Any>;
 }
 
-// ─── Extension Template (marker-only, for backward compatibility) ────
-// The emitter-side expansion approach: extension semantics live in
-// buildSchemaFromTypeGraph() in emitter/lib.ts.
-
-model V1BasedPermission<
-  Application extends string,
-  Resource extends string,
-  Verb extends string,
-  V2Perm extends string
-> {
-  application: Application;
-  resource: Resource;
-  verb: Verb;
-  v2Perm: V2Perm;
-}
+// Service extensions: use Kessel.V1WorkspacePermission from ../lib/kessel-extensions.tsp
+// (declarative patch rules; generic emitter applies patches to this schema).

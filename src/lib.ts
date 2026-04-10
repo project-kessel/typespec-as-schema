@@ -160,11 +160,12 @@ export function discoverResources(program: Program): {
   return { resources, extensions };
 }
 
+/** Template for workspace-scoped v1→v2 permission extensions (patch rules in kessel-extensions.tsp). */
 export function findV1PermissionTemplate(program: Program): Model | null {
   const globalNs = program.getGlobalNamespaceType();
   function search(ns: Namespace): Model | null {
     for (const [, model] of ns.models) {
-      if (model.name === "V1BasedPermission") return model;
+      if (model.name === "V1WorkspacePermission") return model;
     }
     for (const [, childNs] of ns.namespaces) {
       const found = search(childNs);
@@ -570,10 +571,10 @@ export interface IntermediateRepresentation {
 
 export function generateIR(
   mainFile: string,
-  resources: ResourceDef[],
-  extensions: V1Extension[]
+  fullSchema: ResourceDef[],
+  extensions: V1Extension[],
+  jsonSchemaFields: JsonSchemaExtraField[] = [],
 ): IntermediateRepresentation {
-  const fullSchema = buildSchemaFromTypeGraph(resources, extensions);
   return {
     version: "1.0.0",
     generatedAt: new Date().toISOString(),
@@ -581,8 +582,8 @@ export function generateIR(
     resources: fullSchema,
     extensions,
     spicedb: generateSpiceDB(fullSchema),
-    metadata: generateMetadata(resources, extensions),
-    jsonSchemas: generateUnifiedJsonSchemas(resources),
+    metadata: generateMetadata(fullSchema, extensions),
+    jsonSchemas: generateUnifiedJsonSchemas(fullSchema, jsonSchemaFields),
   };
 }
 
@@ -600,5 +601,6 @@ export async function compileAndDiscover(mainFile: string) {
     throw new Error(`Compilation failed:\n${msgs.join("\n")}`);
   }
 
-  return discoverResources(program);
+  const { resources, extensions } = discoverResources(program);
+  return { resources, extensions, program };
 }

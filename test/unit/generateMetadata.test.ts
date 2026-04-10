@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateMetadata, type ResourceDef, type V1Extension } from "../../emitter/lib.js";
+import { generateMetadata, type ResourceDef, type V1Extension } from "../../src/lib.js";
 
 describe("generateMetadata", () => {
   const inventoryExtensions: V1Extension[] = [

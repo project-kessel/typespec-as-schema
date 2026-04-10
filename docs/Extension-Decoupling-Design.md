@@ -5,7 +5,7 @@
 
 ## Problem
 
-In the TypeSpec POC, `V1BasedPermission` in `rbac.tsp` is a marker model -- it carries four string parameters but no behavior. The actual expansion logic (what relations to add to `role`, `role_binding`, `workspace`) is hardcoded in `emitter/lib.ts` `buildSchemaFromTypeGraph()`. Adding a new extension pattern requires modifying TypeScript emitter code.
+In the TypeSpec POC, `V1BasedPermission` in `rbac.tsp` is a marker model -- it carries four string parameters but no behavior. The actual expansion logic (what relations to add to `role`, `role_binding`, `workspace`) is hardcoded in `src/lib.ts` `buildSchemaFromTypeGraph()`. Adding a new extension pattern requires modifying TypeScript emitter code.
 
 In CUE and KSL, extension definitions live at the schema layer and emitters are generic visitors with no extension awareness.
 
@@ -189,9 +189,9 @@ Both POCs are implemented and tested. All 145 tests pass (88 original + 12 KSL I
 
 | Metric | Current (hardcoded) | Option A (declarative) | Option B (KSL IR bridge) |
 |--------|-------------------|----------------------|------------------------|
-| Extension definition | `buildSchemaFromTypeGraph` in `emitter/lib.ts` (102 LOC, TypeScript) | `lib/kessel-extensions.tsp` (52 LOC, TypeSpec) | `samples/rbac.ksl` (existing, KSL) |
-| Generic infrastructure | N/A (hardcoded) | `emitter/declarative-extensions.ts` (240 LOC, written once) | `emitter/ksl-ir-emitter.ts` (262 LOC, written once) |
-| Files changed for new extension pattern | `emitter/lib.ts` (emitter code) | `lib/kessel-extensions.tsp` (TypeSpec only) | `.ksl` file (KSL only) |
+| Extension definition | `buildSchemaFromTypeGraph` in `src/lib.ts` (102 LOC, TypeScript) | `lib/kessel-extensions.tsp` (52 LOC, TypeSpec) | `samples/rbac.ksl` (existing, KSL) |
+| Generic infrastructure | N/A (hardcoded) | `src/declarative-extensions.ts` (240 LOC, written once) | `src/ksl-ir-emitter.ts` (262 LOC, written once) |
+| Files changed for new extension pattern | `src/lib.ts` (emitter code) | `lib/kessel-extensions.tsp` (TypeSpec only) | `.ksl` file (KSL only) |
 | Extension owner touches emitter? | Yes | No | No |
 | Language for extensions | TypeScript | TypeSpec string-literal DSL | KSL |
 | Runtime dependency | Node.js | Node.js | Go (after build) |

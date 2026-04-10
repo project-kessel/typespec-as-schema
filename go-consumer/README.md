@@ -9,9 +9,8 @@ This demonstrates how a Go service consumes TypeSpec schemas **without requiring
  │                    Build Time (CI / Dev)                        │
  │                    Requires: Node.js + npm                      │
  │                                                                 │
- │  .tsp schemas ──► TypeSpec Compiler ──► Custom Emitter (--ir)   │
- │  (rbac.tsp,        (tsp compile)        (spicedb-emitter.ts)    │
- │   hbi.tsp, ...)                               │                 │
+ │  schema/*.tsp ──► TypeSpec Compiler ──► src/spicedb-emitter   │
+ │                   (tsp compile)          (--ir)                 │
  │                                                ▼                │
  │                                        schema/resources.json    │
  └────────────────────────────────────────────────┬────────────────┘
@@ -25,7 +24,7 @@ This demonstrates how a Go service consumes TypeSpec schemas **without requiring
  │  schema.LoadEmbedded() ──► IntermediateRepresentation           │
  │       │                                                         │
  │       ├──► .Resources   (full expanded type graph)              │
- │       ├──► .Extensions  (V1BasedPermission instances)           │
+ │       ├──► .Extensions  (V1WorkspacePermission instances)       │
  │       ├──► .SpiceDB     (generated Zed schema string)           │
  │       ├──► .Metadata    (per-service permission/resource lists) │
  │       └──► .JSONSchemas (unified JSON schemas)                  │
@@ -41,12 +40,12 @@ This demonstrates how a Go service consumes TypeSpec schemas **without requiring
 make all
 
 # Or step by step:
-make compile      # validate .tsp + emit JSON Schema (tsp-output/)
+make compile      # validate schema + emit JSON Schema (tsp-output/)
 make emit-ir      # write go-consumer/schema/resources.json
 make go-build     # compile Go binary with embedded IR
 
 # Run the standalone binary (no Node.js required)
-make run
+make run-consumer
 
 # Or run directly:
 ./go-consumer/bin/schema-consumer
@@ -62,10 +61,10 @@ The IR file is the complete output of a single TypeSpec compilation:
 | `generatedAt` | Timestamp of generation                           |
 | `source`      | Source .tsp entry point                           |
 | `resources`   | Full expanded type graph (after RBAC extension)   |
-| `extensions`  | V1BasedPermission instances discovered            |
+| `extensions`  | Workspace permission extension params (from aliases) |
 | `spicedb`     | Generated SpiceDB/Zed schema as a string          |
 | `metadata`    | Per-service permission and resource lists          |
-| `jsonSchemas` | Unified JSON schemas for data-bearing resources   |
+| `jsonSchemas` | Unified JSON schemas (ExactlyOne assignable `_id` + extension `jsonSchema_addField`) |
 
 ## Go API
 
@@ -97,17 +96,14 @@ func main() {
 
 ## Regenerating the IR
 
-After modifying any `.tsp` schema file:
+After modifying any `.tsp` under `schema/`:
 
 ```bash
-# npm script
 npm run emit:ir
-
-# or Make
+# or
 make emit-ir
-
-# or directly
-npx tsx emitter/spicedb-emitter.ts main.tsp --ir go-consumer/schema/resources.json
+# or
+npx tsx src/spicedb-emitter.ts schema/main.tsp --ir go-consumer/schema/resources.json
 ```
 
 Then rebuild the Go binary to pick up the changes:
@@ -115,3 +111,5 @@ Then rebuild the Go binary to pick up the changes:
 ```bash
 make go-build
 ```
+
+**Related:** Jira [RHCLOUD-44305](https://redhat.atlassian.net/browse/RHCLOUD-44305); finalist doc KSL-055 (internal).

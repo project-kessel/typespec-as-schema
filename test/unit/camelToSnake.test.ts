@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { camelToSnake } from "../../emitter/lib.js";
+import { camelToSnake } from "../../src/lib.js";
 
 describe("camelToSnake", () => {
   it("converts PascalCase to snake_case", () => {

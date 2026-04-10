@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePermissionExpr } from "../../emitter/lib.js";
+import { parsePermissionExpr } from "../../src/lib.js";
 
 describe("parsePermissionExpr", () => {
   it("returns null for empty string", () => {

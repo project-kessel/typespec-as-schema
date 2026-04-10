@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseAccumulateRule,
   parseJsonSchemaFieldRule,
-} from "../../emitter/declarative-extensions.js";
+} from "../../src/declarative-extensions.js";
 
 describe("parseAccumulateRule", () => {
   it("parses a full accumulate rule with when and public", () => {

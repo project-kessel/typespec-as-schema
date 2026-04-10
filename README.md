@@ -1,162 +1,103 @@
 # TypeSpec-as-Schema POC
 
-Prototype exploring TypeSpec as a unified schema representation for Kessel, implementing the same RBAC + HBI benchmark scenario as the other POCs.
+Prototype exploring [TypeSpec](https://typespec.io/) as a unified schema representation for Kessel (same RBAC + HBI benchmark as sibling POCs).
+
+**Layout (as planned — parity with `ts-as-schema`):**
+
+| Folder | Role |
+|--------|------|
+| **`schema/`** | **Adopter + composition:** `main.tsp` entrypoint and service modules only (`rbac.tsp`, `hbi.tsp`, …). No platform vocabulary here. |
+| **`lib/`** | **Platform vocabulary:** `kessel.tsp` (Assignable, Permission, …) and `kessel-extensions.tsp` (`V1WorkspacePermission` + patch rules). |
+| **`src/`** | **Interpreter / tooling:** TypeScript that walks the TypeSpec program and emits SpiceDB, IR, metadata, KSL IR, unified JSON Schema. |
+| **`samples/`** | Frozen **`demo-output.txt`** from `make samples` or `make demo` (review without running Node). |
+| **`go-consumer/`** | Optional Go binary that embeds emitted IR (`//go:embed`). |
+| **`test/`** | Vitest (imports from `src/`). |
+
+**One-line map:** Authors extend **`schema/`** (and import **`lib/`** for Kessel types); all codegen lives in **`src/`**. Evaluators run **`make demo`** or **`make run`** (alias) for a console tour; **`make samples`** refreshes checked-in sample output.
 
 ## Quick Start
 
 ```bash
 npm install
-tsp compile main.tsp          # Compile schemas, emit JSONSchema
-npx tsx emitter/spicedb-emitter.ts  # Generate SpiceDB/Zed schema
+make demo              # or: make run — SpiceDB + metadata + JSON Schema fragment on stdout
+make samples           # regenerate samples/demo-output.txt (same content as demo + file header)
+# or stepwise:
+npx tsp compile schema/main.tsp
+npx tsx src/spicedb-emitter.ts schema/main.tsp
 ```
 
 ## Architecture
 
 ```
-TypeSpec Schema Files (.tsp)
+lib/*.tsp  +  schema/*.tsp
     |
     v
-TypeSpec Compiler
+TypeSpec Compiler (tsp compile schema/main.tsp)
     |
-    +---> JSONSchema (built-in @typespec/json-schema emitter)
-    |         -> tsp-output/json-schema/HostData.yaml
+    +---> JSONSchema (built-in) → tsp-output/json-schema/
     |
-    +---> SpiceDB/Zed Schema (custom emitter)
-              -> stdout (see emitter/spicedb-emitter.ts)
+    +---> src/spicedb-emitter.ts
+              → stdout / --ir / --metadata / --unified-jsonschema / --ksl-ir
 ```
 
-## File Structure
+Services register permissions with **`Kessel.V1WorkspacePermission<...>`** (`lib/kessel-extensions.tsp`). **`applyDeclaredPatches`** lives in `src/declarative-extensions.ts`; **`expandSchemaWithExtensions`** in `src/pipeline.ts`. `buildSchemaFromTypeGraph` in `src/lib.ts` is a **legacy reference** for tests.
+
+## Cross-links (evaluation)
+
+- Jira [RHCLOUD-44305](https://redhat.atlassian.net/browse/RHCLOUD-44305), finalist framing **KSL-055** (internal Design Docs).
+- Repo: `poc/typespec-as-schema/`.
+- [docs/Extension-Decoupling-Design.md](docs/Extension-Decoupling-Design.md).
+
+## Risks and tradeoffs
+
+- **Node.js in CI** for `tsp` + `tsx`; Go consumer runtime needs no Node.
+- **Emitter maintenance** — new extension *patch kinds* may require `src/` changes.
+- **Patch DSL** — string rules are not fully validated by the TypeSpec checker.
+- **Unified JSON Schema** — `jsonSchema_addField` values are currently applied to every non-`rbac` resource schema; per-service attribution may need refinement.
+
+## File structure
 
 ```
-lib/kessel.tsp              # Core types: Cardinality, Assignable, Permission, BoolRelation
-schemas/rbac.tsp             # RBAC: Principal, Role, RoleBinding, Workspace + extension template
-schemas/hbi.tsp              # HBI: Host with data fields, permissions, extension calls
-schemas/rbac-augment.tsp     # Alternative: RBAC using augment-based extensions
-schemas/hbi-augment.tsp      # Alternative: HBI using model-is composition for extensions
-main.tsp                     # Entrypoint
-emitter/spicedb-emitter.ts   # SpiceDB/Zed schema generator (POC emitter)
+lib/
+  kessel.tsp
+  kessel-extensions.tsp
+schema/
+  main.tsp
+  rbac.tsp
+  hbi.tsp
+  remediations.tsp
+  policy.tsp
+  rbac-augment.tsp
+  hbi-augment.tsp
+src/
+  spicedb-emitter.ts
+  lib.ts
+  pipeline.ts
+  declarative-extensions.ts
+  ksl-ir-emitter.ts
+samples/
+  README.md
+  demo-output.txt
+go-consumer/
+test/
+tspconfig.yaml
+Makefile
 ```
 
-## Two Extension Approaches Explored
-
-### Approach 1: Template Model (rbac.tsp + hbi.tsp)
-Extensions defined as parameterized generic models (`V1BasedPermission<App, Resource, Verb, V2Perm>`). The custom emitter discovers instantiations (via `alias`) and expands the template.
-
-**Pros**: Clean schema files, extension intent is clear
-**Cons**: Expansion logic lives in the emitter, not in the schema
-
-### Approach 2: Augment + Model-Is (rbac-augment.tsp + hbi-augment.tsp)
-Extensions use `model ... is BaseModel { ...extra props... }` to compose extended versions of RBAC types with additional permissions.
-
-**Pros**: Extension results are explicit in the schema
-**Cons**: Produces new model types rather than modifying originals; more verbose; `augment` can only add decorators, not properties
-
-## Benchmark Results
-
-### Feature Completeness
+## Benchmark highlights
 
 | Feature | TypeSpec |
 |---------|----------|
-| Resource type definitions | Y |
-| Visibility controls | Partial (via convention/decorators) |
-| Zanzibar set operations (and/or/unless) | Y (as string expressions in Permission<>) |
-| Cardinality constraints | Y (via enum + generics) |
-| Data field definitions | Y (native TypeSpec types) |
-| Data validation rules | Y (format, pattern, maxLength, etc.) |
-| Type unions | Y (native `string \| SatelliteNumericId`) |
-| Cooperative extensions | Partial (template models + emitter expansion) |
-| Extension control (predefined points) | Partial (template enforces structure) |
-| allow_duplicates / idempotent extensions | Y (emitter handles dedup) |
-| Cross-namespace imports | Y (native `import`) |
-| SpiceDB/Zed output | Y (custom emitter) |
-| JSONSchema output | Y (built-in emitter, high quality) |
-| Common vs service-specific distinction | N |
-| Advanced dynamic permissions | Limited (string-based expressions) |
+| Resource + relation modeling | Y |
+| Zanzibar-style `Permission<"expr">` | Y |
+| Data fields + JSON Schema | Y |
+| Cooperative extensions | Y (declarative template + `src/` applicator) |
+| SpiceDB / Zed | Y |
 
-### Impressions
+## Refresh `samples/demo-output.txt`
 
-**Strengths**:
-- Best-in-class JSONSchema output — native TypeSpec types with validation decorators produce high-quality JSONSchema with proper `format`, `pattern`, `anyOf`, `maxLength` support
-- Excellent IDE support — VSCode extension with autocomplete, error detection, go-to-definition
-- Strong type system catches errors at schema authoring time
-- Clean, readable syntax for data fields
-- Active ecosystem with Microsoft backing
-- AI models (Claude, GPT) understand TypeSpec well
-
-**Weaknesses**:
-- **Cooperative templating is the main challenge** — TypeSpec doesn't have a native mechanism for one model to programmatically add properties to another model at compile time. The `augment` keyword can add decorators but not properties. Extensions must either:
-  - Be expanded by a custom emitter (template approach) — logic moves out of the schema
-  - Create new model types via `model-is` composition — doesn't modify originals
-- **Zanzibar set operations not native** — must be encoded as string expressions in `Permission<"expr">` or as model metadata; the type system doesn't validate these
-- **Node.js dependency** — TypeSpec compiler requires Node.js runtime
-- **No imperative logic** — can't express the v1-based permission expansion as code in the schema itself (unlike TypeScript and Starlark)
-
-**Key finding**: TypeSpec excels at the data validation side (JSONSchema) but struggles with the authorization/relationship side (SpiceDB). It's the inverse of KSL, which excels at authorization but lacks data fields. A hybrid approach using TypeSpec for data fields and another mechanism for authorization could be powerful.
-
-## Outputs
-
-### JSONSchema (HostData.yaml)
-```yaml
-$schema: https://json-schema.org/draft/2020-12/schema
-type: object
-properties:
-  subscription_manager_id:
-    type: string
-    format: uuid
-  satellite_id:
-    anyOf:
-      - type: string
-      - $ref: "#/$defs/SatelliteNumericId"
-  insights_id:
-    type: string
-    format: uuid
-  ansible_host:
-    type: string
-    maxLength: 255
-$defs:
-  SatelliteNumericId:
-    type: string
-    pattern: ^\d{10}$
-```
-
-### SpiceDB/Zed Schema
-```
-definition rbac/principal {
-}
-
-definition rbac/role {
-    relation all_all_all: rbac/principal:*
-    relation inventory_all_all: rbac/principal:*
-    relation inventory_hosts_all: rbac/principal:*
-    relation inventory_all_read: rbac/principal:*
-    relation inventory_hosts_read: rbac/principal:*
-    relation inventory_all_write: rbac/principal:*
-    relation inventory_hosts_write: rbac/principal:*
-
-    permission inventory_host_view = all_all_all + inventory_all_all + ...
-    permission inventory_host_update = all_all_all + inventory_all_all + ...
-}
-
-definition rbac/role_binding {
-    relation subject: rbac/principal
-    relation granted: rbac/role
-
-    permission inventory_host_view = subject & granted->inventory_host_view
-    permission inventory_host_update = subject & granted->inventory_host_update
-}
-
-definition rbac/workspace {
-    relation parent: rbac/workspace
-    relation user_grant: rbac/role_binding
-
-    permission inventory_host_view = user_grant->inventory_host_view + parent->inventory_host_view
-    permission inventory_host_update = user_grant->inventory_host_update + parent->inventory_host_update
-}
-
-definition inventory/host {
-    relation workspace: rbac/workspace
-
-    permission view = workspace->inventory_host_view
-    permission update = workspace->inventory_host_update
-}
+```bash
+make samples
+# equivalent:
+make demo > samples/demo-output.txt 2>&1
 ```

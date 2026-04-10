@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateSpiceDB, type ResourceDef } from "../../emitter/lib.js";
+import { generateSpiceDB, type ResourceDef } from "../../src/lib.js";
 
 describe("generateSpiceDB", () => {
   it("generates an empty definition for a resource with no relations", () => {

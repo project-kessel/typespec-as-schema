@@ -4,7 +4,11 @@
 //   1. SpiceDB/Zed schema (from relation types)
 //   2. JSONSchema (from data models, via built-in emitter)
 //   3. Intermediate representation (for Kessel Inventory API)
+//
+// Extension templates (V1WorkspacePermission + patch rules) live in ../lib/kessel-extensions.tsp
+// (platform vocabulary; service schemas import the same).
 
-import "./schemas/rbac.tsp";
-import "./schemas/hbi.tsp";
-import "./schemas/remediations.tsp";
+import "../lib/kessel-extensions.tsp";
+import "./rbac.tsp";
+import "./hbi.tsp";
+import "./remediations.tsp";

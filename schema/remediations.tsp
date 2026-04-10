@@ -4,6 +4,7 @@
 // authorization extensions, not data schemas.
 
 import "../lib/kessel.tsp";
+import "../lib/kessel-extensions.tsp";
 import "./rbac.tsp";
 
 using Kessel;
@@ -13,7 +14,7 @@ namespace Remediations;
 // ─── Extension Applications ──────────────────────────────────────────
 
 /** Maps remediations:remediations:read → remediations_remediation_view on workspace */
-alias remediationViewPermission = RBAC.V1BasedPermission<
+alias remediationViewPermission = Kessel.V1WorkspacePermission<
   "remediations",
   "remediations",
   "read",
@@ -21,7 +22,7 @@ alias remediationViewPermission = RBAC.V1BasedPermission<
 >;
 
 /** Maps remediations:remediations:write → remediations_remediation_update on workspace */
-alias remediationUpdatePermission = RBAC.V1BasedPermission<
+alias remediationUpdatePermission = Kessel.V1WorkspacePermission<
   "remediations",
   "remediations",
   "write",
