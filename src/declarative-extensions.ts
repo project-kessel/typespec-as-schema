@@ -15,6 +15,27 @@ import { isTemplateInstance } from "@typespec/compiler";
 import type { ResourceDef, RelationDef, RelationBody } from "./lib.js";
 import { getNamespaceFQN, parsePermissionExpr } from "./lib.js";
 
+// ─── Errors ───────────────────────────────────────────────────────────
+
+export class ExtensionPatchError extends Error {
+  constructor(
+    message: string,
+    readonly context?: Record<string, string>,
+  ) {
+    super(message);
+    this.name = "ExtensionPatchError";
+  }
+}
+
+function failPatch(
+  strict: boolean,
+  message: string,
+  ctx?: Record<string, string>,
+): void {
+  if (!strict) return;
+  throw new ExtensionPatchError(message, ctx);
+}
+
 // ─── Declarative Extension Instance ──────────────────────────────────
 
 export interface DeclaredExtension {
@@ -83,6 +104,10 @@ export interface JsonSchemaFieldRule {
   fieldType: string;
   format?: string;
   required: boolean;
+  /** Present when emitted from V1WorkspacePermission: limits Unified JSON Schema targets. */
+  application?: string;
+  /** Template `resource` param (e.g. hosts); used with application to narrow the model. */
+  resource?: string;
 }
 
 export function parseJsonSchemaFieldRule(raw: string): JsonSchemaFieldRule | null {
@@ -243,12 +268,19 @@ export interface DeclaredPatchResult {
   jsonSchemaFields: JsonSchemaFieldRule[];
 }
 
+export interface ApplyDeclaredPatchesOptions {
+  /** When true (default), unparseable patch rules throw ExtensionPatchError. */
+  strict?: boolean;
+}
+
 // ─── Application ─────────────────────────────────────────────────────
 
 export function applyDeclaredPatches(
   resources: ResourceDef[],
   extensions: DeclaredExtension[],
+  options?: ApplyDeclaredPatchesOptions,
 ): DeclaredPatchResult {
+  const strict = options?.strict !== false;
   const roleExtra: RelationDef[] = [];
   const roleBindingExtra: RelationDef[] = [];
   const workspaceExtra: RelationDef[] = [];
@@ -278,7 +310,14 @@ export function applyDeclaredPatches(
         }
       } else if (rule.patchType === "permission") {
         const rel = parsePermissionRule(value);
-        if (!rel) continue;
+        if (!rel) {
+          failPatch(
+            strict,
+            `Invalid permission patch rule for extension ${ext.params.v2Perm ?? "?"} (${rule.target}): ${JSON.stringify(value)}`,
+            { v2Perm: ext.params.v2Perm ?? "", target: rule.target, raw: value },
+          );
+          continue;
+        }
 
         if (rule.target === "role") roleExtra.push(rel);
         else if (rule.target === "roleBinding") roleBindingExtra.push(rel);
@@ -290,7 +329,14 @@ export function applyDeclaredPatches(
         publicPerms.add(value);
       } else if (rule.patchType === "accumulate") {
         const parsed = parseAccumulateRule(rule.rawValue);
-        if (!parsed) continue;
+        if (!parsed) {
+          failPatch(
+            strict,
+            `Invalid accumulate patch rule for extension ${ext.params.v2Perm ?? "?"} (${rule.target}): ${JSON.stringify(rule.rawValue)}`,
+            { v2Perm: ext.params.v2Perm ?? "", target: rule.target, raw: rule.rawValue },
+          );
+          continue;
+        }
 
         const key = `${rule.target}/${parsed.name}`;
         if (!accumulators.has(key)) {
@@ -310,7 +356,29 @@ export function applyDeclaredPatches(
         }
       } else if (rule.target === "jsonSchema" && rule.patchType === "addField") {
         const parsed = parseJsonSchemaFieldRule(value);
-        if (parsed) jsonSchemaFields.push(parsed);
+        if (!parsed) {
+          failPatch(
+            strict,
+            `Invalid jsonSchema_addField rule for extension ${ext.params.v2Perm ?? "?"}: ${JSON.stringify(value)}`,
+            { v2Perm: ext.params.v2Perm ?? "", raw: value },
+          );
+          continue;
+        }
+        const application = ext.params.application?.trim();
+        if (!application) {
+          failPatch(
+            strict,
+            `Extension ${ext.params.v2Perm ?? "?"} missing application param (required for jsonSchema_addField)`,
+            { v2Perm: ext.params.v2Perm ?? "" },
+          );
+          continue;
+        }
+        const resource = ext.params.resource?.trim();
+        jsonSchemaFields.push({
+          ...parsed,
+          application,
+          ...(resource ? { resource } : {}),
+        });
       }
     }
   }

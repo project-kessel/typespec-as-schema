@@ -9,7 +9,7 @@
 //   - Workspace binding is "binding"
 //   - view_metadata accumulates all read-verb v2 permissions
 //
-// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--ksl-ir [outdir]]
+// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--ksl-ir [outdir]] [--lenient-extensions]
 
 import * as fs from "fs";
 import {
@@ -29,6 +29,7 @@ async function main() {
   const emitUnifiedJsonSchema = args.includes("--unified-jsonschema");
   const emitIR = args.includes("--ir");
   const emitKslIR = args.includes("--ksl-ir");
+  const lenientExtensions = args.includes("--lenient-extensions");
   const mainFile =
     args.find((a) => !a.startsWith("--")) ||
     path.resolve(import.meta.dirname ?? ".", "../schema/main.tsp");
@@ -40,6 +41,7 @@ async function main() {
   const { fullSchema, jsonSchemaFields } = expandSchemaWithExtensions(
     program,
     resources,
+    { strict: !lenientExtensions },
   );
 
   console.error(

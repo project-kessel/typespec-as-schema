@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "generatedAt": "2026-04-09T18:14:31.016Z",
+  "version": "1.1.0",
+  "generatedAt": "2026-04-10T10:02:54.619Z",
   "source": "/Users/akoserwa/schema-unify/poc/typespec-as-schema/schema/main.tsp",
   "resources": [
     {
@@ -518,24 +518,12 @@
           "type": "string",
           "source": "extension-declared",
           "format": "uuid"
-        },
-        "remediations_remediation_view_id": {
-          "type": "string",
-          "source": "extension-declared",
-          "format": "uuid"
-        },
-        "remediations_remediation_update_id": {
-          "type": "string",
-          "source": "extension-declared",
-          "format": "uuid"
         }
       },
       "required": [
         "workspace_id",
         "inventory_host_view_id",
-        "inventory_host_update_id",
-        "remediations_remediation_view_id",
-        "remediations_remediation_update_id"
+        "inventory_host_update_id"
       ]
     }
   }

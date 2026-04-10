@@ -119,6 +119,15 @@ describe("Declarative extension discovery", () => {
     }
   });
 
+  it("attaches application (and resource) to collected JSON Schema field rules", () => {
+    const inv = jsonSchemaFields.filter((f) => f.application === "inventory");
+    const rem = jsonSchemaFields.filter((f) => f.application === "remediations");
+    expect(inv).toHaveLength(2);
+    expect(rem).toHaveLength(2);
+    expect(inv.every((f) => f.resource === "hosts")).toBe(true);
+    expect(rem.every((f) => f.resource === "remediations")).toBe(true);
+  });
+
   it("patch rules cover role, roleBinding, workspace, and jsonSchema targets", () => {
     for (const ext of declaredExtensions) {
       const targets = new Set(ext.patchRules.map((r) => r.target));
@@ -232,6 +241,12 @@ describe("Declarative extension: JSON Schema field patches", () => {
     expect(hostSchema.properties["inventory_host_view_id"].type).toBe("string");
     expect(hostSchema.properties["inventory_host_view_id"].format).toBe("uuid");
     expect(hostSchema.properties["inventory_host_view_id"].source).toBe("extension-declared");
+  });
+
+  it("does not apply other services' jsonSchema_addField rules to inventory/host", () => {
+    const hostSchema = unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.properties["remediations_remediation_view_id"]).toBeUndefined();
+    expect(hostSchema.properties["remediations_remediation_update_id"]).toBeUndefined();
   });
 
   it("extension-declared required fields appear in the required array", () => {

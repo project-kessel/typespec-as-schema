@@ -470,6 +470,26 @@ export interface JsonSchemaExtraField {
   fieldType: string;
   format?: string;
   required: boolean;
+  /** When set, only attach to resources in this namespace (lowercase). Omit = all non-rbac (legacy). */
+  application?: string;
+  /** Template `resource` param; narrows when several models share a namespace. */
+  resource?: string;
+}
+
+/**
+ * Match TypeSpec model name (e.g. Host) to V1WorkspacePermission `resource` (e.g. hosts).
+ */
+export function extensionResourceMatchesModel(
+  modelName: string,
+  resourceSlug: string | undefined,
+): boolean {
+  if (resourceSlug == null || resourceSlug === "") return true;
+  const m = modelName.toLowerCase();
+  const s = resourceSlug.toLowerCase();
+  if (m === s) return true;
+  if (s.length > 1 && s.endsWith("s") && m === s.slice(0, -1)) return true;
+  if (m.length > 1 && m.endsWith("s") && s === m.slice(0, -1)) return true;
+  return false;
 }
 
 export function generateUnifiedJsonSchemas(
@@ -509,6 +529,20 @@ export function generateUnifiedJsonSchemas(
 
     if (extraFields) {
       for (const field of extraFields) {
+        if (
+          field.application != null &&
+          field.application !== res.namespace
+        ) {
+          continue;
+        }
+        if (!extensionResourceMatchesModel(res.name, field.resource)) {
+          continue;
+        }
+        if (schema.properties[field.fieldName] != null) {
+          throw new Error(
+            `Unified JSON Schema: duplicate property "${field.fieldName}" on ${res.namespace}/${res.name}`,
+          );
+        }
         const prop: { type: string; format?: string; source?: string } = {
           type: field.fieldType,
           source: "extension-declared",
@@ -576,7 +610,7 @@ export function generateIR(
   jsonSchemaFields: JsonSchemaExtraField[] = [],
 ): IntermediateRepresentation {
   return {
-    version: "1.0.0",
+    version: "1.1.0",
     generatedAt: new Date().toISOString(),
     source: mainFile,
     resources: fullSchema,
