@@ -8,7 +8,7 @@ Prototype exploring [TypeSpec](https://typespec.io/) as a unified schema represe
 |--------|------|
 | **`schema/`** | **Adopter + composition:** `main.tsp` entrypoint and service modules only (`rbac.tsp`, `hbi.tsp`, …). No platform vocabulary here. |
 | **`lib/`** | **Platform vocabulary:** `kessel.tsp` (Assignable, Permission, …) and `kessel-extensions.tsp` (`V1WorkspacePermission` + patch rules). |
-| **`src/`** | **Interpreter / tooling:** TypeScript that walks the TypeSpec program and emits SpiceDB, IR, metadata, KSL IR, unified JSON Schema. |
+| **`src/`** | **Interpreter / tooling:** TypeScript that walks the TypeSpec program and emits SpiceDB, IR, metadata, unified JSON Schema. |
 | **`samples/`** | Frozen **`demo-output.txt`** from `make samples` or `make demo` (review without running Node). |
 | **`go-consumer/`** | Optional Go binary that embeds emitted IR (`//go:embed`). |
 | **`test/`** | Vitest (imports from `src/`). |
@@ -39,14 +39,14 @@ TypeSpec Compiler (tsp compile schema/main.tsp)
     +---> JSONSchema (built-in) → tsp-output/json-schema/
     |
     +---> src/spicedb-emitter.ts
-              → stdout / --ir / --metadata / --unified-jsonschema / --ksl-ir
+              → stdout / --ir / --metadata / --unified-jsonschema
 ```
 
 Services register permissions with **`Kessel.V1WorkspacePermission<...>`** (`lib/kessel-extensions.tsp`). **`applyDeclaredPatches`** lives in `src/declarative-extensions.ts`; **`expandSchemaWithExtensions`** in `src/pipeline.ts`. `buildSchemaFromTypeGraph` in `src/lib.ts` is a **legacy reference** for tests.
 
 ## Cross-links (evaluation)
 
-- Jira [RHCLOUD-44305](https://redhat.atlassian.net/browse/RHCLOUD-44305), finalist framing **KSL-055** (internal Design Docs).
+- Jira [RHCLOUD-44305](https://redhat.atlassian.net/browse/RHCLOUD-44305); internal design docs for schema unification program (evaluation).
 - Repo: `poc/typespec-as-schema/`.
 - [docs/Extension-Decoupling-Design.md](docs/Extension-Decoupling-Design.md).
 
@@ -76,7 +76,6 @@ src/
   lib.ts
   pipeline.ts
   declarative-extensions.ts
-  ksl-ir-emitter.ts
 samples/
   README.md
   demo-output.txt

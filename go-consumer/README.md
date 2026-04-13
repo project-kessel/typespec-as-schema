@@ -112,4 +112,4 @@ Then rebuild the Go binary to pick up the changes:
 make go-build
 ```
 
-**Related:** Jira [RHCLOUD-44305](https://redhat.atlassian.net/browse/RHCLOUD-44305); finalist doc KSL-055 (internal).
+**Related:** Jira [RHCLOUD-44305](https://redhat.atlassian.net/browse/RHCLOUD-44305); internal schema-unification design docs (evaluation).

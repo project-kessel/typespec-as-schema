@@ -9,7 +9,7 @@
 //   - Workspace binding is "binding"
 //   - view_metadata accumulates all read-verb v2 permissions
 //
-// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--ksl-ir [outdir]] [--lenient-extensions]
+// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--lenient-extensions]
 
 import * as fs from "fs";
 import {
@@ -21,14 +21,12 @@ import {
   path,
 } from "./lib.js";
 import { expandSchemaWithExtensions } from "./pipeline.js";
-import { generateKslIR } from "./ksl-ir-emitter.js";
 
 async function main() {
   const args = process.argv.slice(2);
   const emitMetadata = args.includes("--metadata");
   const emitUnifiedJsonSchema = args.includes("--unified-jsonschema");
   const emitIR = args.includes("--ir");
-  const emitKslIR = args.includes("--ksl-ir");
   const lenientExtensions = args.includes("--lenient-extensions");
   const mainFile =
     args.find((a) => !a.startsWith("--")) ||
@@ -45,24 +43,10 @@ async function main() {
   );
 
   console.error(
-    `Discovered ${resources.length} resources, ${extensions.length} V1WorkspacePermission extensions, expanded to ${fullSchema.length} resource defs.`
+    `Discovered ${resources.length} resources, ${extensions.length} V1WorkspacePermission extensions, expanded to ${fullSchema.length} resource defs.`,
   );
 
-  if (emitKslIR) {
-    const kslIndex = args.indexOf("--ksl-ir");
-    const nextArg = args[kslIndex + 1];
-    const outDir = nextArg && !nextArg.startsWith("--")
-      ? nextArg
-      : path.resolve(import.meta.dirname ?? ".", "../ksl-ir-output");
-    fs.mkdirSync(outDir, { recursive: true });
-    const namespaces = generateKslIR(resources, extensions);
-    for (const ns of namespaces) {
-      const outPath = path.join(outDir, `${ns.name}.json`);
-      fs.writeFileSync(outPath, JSON.stringify(ns, null, 2) + "\n");
-      console.error(`Wrote KSL IR: ${outPath}`);
-    }
-    console.error(`Wrote ${namespaces.length} KSL IR namespace(s) to ${outDir}`);
-  } else if (emitIR) {
+  if (emitIR) {
     const irIndex = args.indexOf("--ir");
     const nextArg = args[irIndex + 1];
     const outPath = nextArg && !nextArg.startsWith("--")

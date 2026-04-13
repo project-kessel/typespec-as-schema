@@ -23,8 +23,6 @@ So in the benchmark, a service developer’s “part of the schema” is **mostl
 - **ts-as-schema:** TypeScript under `schema/` + shared model in `src/model/`; Go loads compiled JS.
 - **Starlark:** `.star` modules under `schema/`; Go interpreter + visitors.
 - **CUE internal DSL:** `.cue` under `internal_dsl/`; Go interpreter walks unified CUE values.
-- **KSL:** `.ksl` files; compiler produces a Go-friendly semantic model.
-
 ---
 
 ## 2. How do we get from that to an in-memory model “in Inventory”?
@@ -79,7 +77,7 @@ So the **in-memory model available to Go** is the **IR**, not the live TypeSpec 
 - **Two JSON Schema stories** — TypeSpec’s **built-in** JSON Schema emitter writes under `tsp-output/` from `@jsonSchema` models. The POC’s **“unified”** JSON Schema (relation `_id` fields + extension `jsonSchema_addField`) is a **separate** path in [`lib.ts`](../../poc/typespec-as-schema/src/lib.ts). Consumers must know which artifact they need for validation.
 - **Strict vs lenient extension parsing** — Default **strict** mode throws on bad patch strings; **`--lenient-extensions`** relaxes that. Go never sees that choice—it only sees **successful** emitted IR.
 
-KSL and CUE POCs differ mainly in **where** the semantic model lives (Go compiler vs Go visitor over CUE) and whether the **same** structure backs all emitters without a Node hop.
+The **CUE** sibling POC differs mainly in **where** the semantic model lives (unified CUE value + Go visitor) and whether the **same** structure backs all emitters without a Node hop.
 
 ---
 
@@ -103,7 +101,7 @@ So **one expanded graph** feeds multiple outputs—the SpiceDB emitter is not th
 
 3. **`jsonSchema_addField` is an output-oriented patch** — It declares **extra JSON Schema fields** explicitly, rather than deriving every column from a single abstract “writable relation” model (see §5).
 
-So: **RBAC can ship an `add_v1_workspace_permission`-style extension that does not require editing `generateSpiceDB` line-by-line**, as long as the effect is expressible in the **existing declarative patch vocabulary**. True independence—**extension package with zero coupling to relation naming or SpiceDB**—would need a **more abstract internal model** and emitters that are pure **visitors** over that model (closer to the KSL / CUE story in [Extension-Decoupling-Design](../../poc/typespec-as-schema/docs/Extension-Decoupling-Design.md)).
+So: **RBAC can ship an `add_v1_workspace_permission`-style extension that does not require editing `generateSpiceDB` line-by-line**, as long as the effect is expressible in the **existing declarative patch vocabulary**. True independence—**extension package with zero coupling to relation naming or SpiceDB**—would need a **more abstract internal model** and emitters that are pure **visitors** over that model (closer to the **CUE** sibling POC story; see [Extension-Decoupling-Design](Extension-Decoupling-Design.md)).
 
 ---
 
@@ -129,7 +127,7 @@ In the TypeSpec POC:
   - **Targeting RBAC** in `generateUnifiedJsonSchemas` (new product decision), or
   - A **neutral** “API / persistence schema” layer that lists writable fields for each resource type, maintained by extensions, with emitters as pure views.
 
-**Patch-the-model vs patch-the-format:** Declarative patches today are closer to **enriching a graph tuned for authorization emission**, plus **explicit** JSON Schema side effects (`jsonSchema_addField`). They are **not** arbitrary AST rewrites of TypeSpec source. A **true** model-level patch would be something like: extensions mutate a **canonical semantic graph**, and JSON Schema and SpiceDB are **only** serializers—closer to **KSL `ApplyExtensions()`** in Go than to string templates in TypeSpec.
+**Patch-the-model vs patch-the-format:** Declarative patches today are closer to **enriching a graph tuned for authorization emission**, plus **explicit** JSON Schema side effects (`jsonSchema_addField`). They are **not** arbitrary AST rewrites of TypeSpec source. A **true** model-level patch would be something like: extensions mutate a **canonical semantic graph**, and JSON Schema and SpiceDB are **only** serializers—closer to a **single compiler-owned semantic graph** than to string templates in TypeSpec alone.
 
 ---
 
@@ -161,7 +159,7 @@ The forced **schema / interpreter** boundary is **good for evaluation** (clear o
 | In-memory model in Go? | **IR JSON** embedded or loaded at runtime; produced by Node emitter from expanded `ResourceDef[]`. |
 | Go limitations? | No `.tsp` in Go; Node at build time; IR versioning; unified vs `tsp-output` JSON Schema. |
 | Extension decoupled from SpiceDB? | **Partially:** same expanded graph feeds multiple emitters; patch **kinds** and **ResourceDef** shape still tie to TS and Zanzibar-style projection. |
-| Writable rels → JSON Schema for role? | **Not automatic** in unified JSON Schema (RBAC skipped); service resources use relation `_id` + explicit `jsonSchema_addField`. True model-level patching favors languages with one semantic graph (e.g. KSL). |
+| Writable rels → JSON Schema for role? | **Not automatic** in unified JSON Schema (RBAC skipped); service resources use relation `_id` + explicit `jsonSchema_addField`. True model-level patching favors a **single** semantic graph consumed by all emitters. |
 
 ---
 

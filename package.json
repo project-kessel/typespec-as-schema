@@ -8,7 +8,6 @@
     "compile": "tsp compile schema/main.tsp",
     "emit:spicedb": "tsx src/spicedb-emitter.ts schema/main.tsp",
     "emit:ir": "tsx src/spicedb-emitter.ts schema/main.tsp --ir go-consumer/schema/resources.json",
-    "emit:ksl-ir": "tsx src/spicedb-emitter.ts schema/main.tsp --ksl-ir ksl-ir-output",
     "emit:metadata": "tsx src/spicedb-emitter.ts schema/main.tsp --metadata"
   },
   "keywords": [],
