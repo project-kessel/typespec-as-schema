@@ -9,6 +9,8 @@
 
 ## Table of Contents
 
+0. [The Problem](#0-the-problem)
+   - [How v2 Solves It](#how-v2-solves-it)
 1. [Executive Summary](#1-executive-summary)
 2. [v1 Gaps Addressed](#2-v1-gaps-addressed)
 3. [Architecture Overview](#3-architecture-overview)
@@ -23,6 +25,101 @@
 12. [Test Coverage](#12-test-coverage)
 13. [Before / After Comparison](#13-before--after-comparison)
 14. [Remaining Gaps & Future Work](#14-remaining-gaps--future-work)
+
+---
+
+## 0. The Problem
+
+The KSL-055 evaluation of all six schema representation candidates (KSL, JSONSchema, TypeSpec, CUE, TypeScript, Starlark) scored TypeSpec **5/4/5/4/4** — strong across the board but with clear soft spots in IDE support (4) and usability (4). The evaluation text pinpointed exactly why:
+
+> *"the core extension logic lives in template strings that TypeSpec's type checker treats as opaque — malformed patch rules, invalid targets, or interpolation mistakes are only caught when the TypeScript emitter runs, not at compile time. This means TypeSpec validates the carrier (alias parameters are type-checked) but not the payload (the patch rules that drive all the real output)."*
+
+In concrete terms, here is what a service team writes in v1 to register a permission:
+
+```typespec
+alias viewPermission = Kessel.V1WorkspacePermission<
+  "inventory",           // application — any string accepted
+  "hosts",               // resource    — any string accepted
+  "read",                // verb        — any string accepted
+  "inventory_host_view"  // v2 perm     — any string accepted
+>;
+```
+
+That one alias expands — behind a wall of opaque string interpolation — into **7+ mutations** across 4 different SpiceDB definitions plus a JSON Schema field addition. But the author has no way to know this, and the compiler has no way to check it. Three specific problems follow:
+
+### Problem 1: Opaque Patch Rules ("carrier vs. payload")
+
+The extension template stores its logic in string-valued properties like:
+
+```
+role_boolRelations: "{app}_any_any,{app}_{res}_any,{app}_any_{verb},{app}_{res}_{verb}";
+workspace_accumulate: "view_metadata=or({v2}),when={verb}==read,public=true";
+```
+
+TypeSpec type-checks the *carrier* — it verifies the alias parameters are strings and the template instantiation is valid. But it treats the *payload* — the patch-rule strings that drive 100% of the real output — as opaque `string` values. The type checker cannot see inside them.
+
+**What goes wrong:**
+- A typo in a property name (`role_boolRelation` instead of `role_boolRelations`) silently produces no bool relations on rbac/role — the emitter just skips it.
+- A malformed permission expression like `{v2}=` (missing body) only fails when the emitter runs, not at the point where the mistake was made.
+- An unrecognized placeholder like `{application}` instead of `{app}` silently interpolates to an empty string, producing broken SpiceDB output with no error.
+
+In other candidates (TypeScript, CUE, Starlark), the extension logic is expressed in the host language itself, so the language's own toolchain catches structural errors. TypeSpec's design trades that for a clean declarative syntax — but leaves a validation gap.
+
+### Problem 2: Raw String Parameters ("just 4 strings")
+
+The template signature in v1:
+
+```typespec
+model V1WorkspacePermission<
+  App extends string,
+  Res extends string,
+  Verb extends string,
+  V2 extends string
+>
+```
+
+All four parameters are bare `string`. The compiler accepts `"READ"`, `"My-App"`, `"foo bar"`, `"  "`, or any other string without complaint. There is no autocomplete for verbs, no naming convention enforcement, and no way for IDE tooling to suggest valid values.
+
+**What goes wrong:**
+- A service team writes `"write"` vs `"Write"` vs `"WRITE"` — all compile, only one works at runtime.
+- An app name with hyphens (`"my-app"`) generates SpiceDB relation names with hyphens, which SpiceDB rejects.
+- A v2 perm name with dashes (`"inventory-host-view"`) silently breaks IR consumers that expect snake_case.
+
+By comparison, TypeScript and CUE POCs use typed enums or constrained value sets for these inputs.
+
+### Problem 3: One-Way Mirror ("what does my alias actually do?")
+
+A service author writing `V1WorkspacePermission<"inventory", "hosts", "read", "inventory_host_view">` has no way to see the result without running the emitter and manually inspecting the generated SpiceDB schema, IR JSON, or metadata output. The mapping from 4 parameters → 7+ effects is invisible.
+
+**What goes wrong:**
+- An author has no mental model of what their alias produces — they can't review it, can't catch mistakes, can't reason about it.
+- Code review is impossible without running the emitter — reviewers see 4 strings but not the 20+ lines of SpiceDB output they produce.
+- Debugging extension issues requires diffing emitter output, not reading the schema source.
+
+---
+
+## How v2 Solves It
+
+Each problem has a targeted fix, all enforced at compile time within the same `tsp compile` invocation:
+
+| # | Problem | Root Cause | v2 Fix | Where |
+|---|---------|-----------|--------|-------|
+| 1 | Opaque patch rules | String properties invisible to type checker | **`$onValidate` hook** parses every patch-rule name and value at compile time; 10 diagnostic codes cover malformed targets, types, expressions, and placeholders | `src/validate.ts` |
+| 2 | Raw string params | `extends string` accepts anything | **`KesselVerb` union type** (`"read" \| "write" \| "create" \| "delete"`) for verb (hard compile error); **regex pattern checks** for app, resource, v2Perm naming (compile diagnostic) | `lib/kessel-extensions.tsp`, `src/validate.ts` |
+| 3 | One-way mirror | No expansion visibility | **`--preview` / `output-format: "preview"`** shows per-alias human-readable expansion: every relation, permission, accumulate, and JSON Schema effect | `src/preview.ts` |
+| — | Two runtimes | Emitter ran separately from `tsp compile` | **Native `$onEmit` plugin** runs inside `tsp compile`; single invocation validates + emits all artifacts | `src/emitter.ts` |
+
+The net effect on KSL-055 fitness scores:
+
+| Criterion | v1 | v2 | Why |
+|-----------|----|----|-----|
+| Benchmark | 5 | 5 | No regression — all benchmark requirements still met |
+| IDE / Tooling | 4 | **5** | Verb autocomplete from union type; red squiggles for bad params and malformed patch rules; preview for expansion visibility |
+| AI Compatibility | 5 | 5 | No change |
+| Usability | 4 | **5** | `--preview` makes the expansion model transparent; constrained verbs reduce guesswork; clear compile errors replace silent runtime failures |
+| Dependencies | 4 | 4 | No change — still requires Node.js at build time |
+
+All changes are **backward-compatible** — existing service `.tsp` files (`hbi.tsp`, `remediations.tsp`) compile without modification.
 
 ---
 
