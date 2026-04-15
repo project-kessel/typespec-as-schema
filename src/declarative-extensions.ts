@@ -374,7 +374,7 @@ export function v1ExtensionsFromDeclarations(
 
 // ─── Interpolation ───────────────────────────────────────────────────
 
-function interpolate(template: string, params: Record<string, string>): string {
+export function interpolate(template: string, params: Record<string, string>): string {
   return template
     .replace(/\{app\}/g, params.application ?? "")
     .replace(/\{res\}/g, params.resource ?? "")

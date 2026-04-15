@@ -9,7 +9,7 @@
 //   - Workspace binding is "binding"
 //   - view_metadata accumulates all read-verb v2 permissions
 //
-// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--lenient-extensions]
+// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--preview] [--lenient-extensions]
 
 import * as fs from "fs";
 import { compileAndDiscover } from "./compile-and-discover.js";
@@ -21,12 +21,17 @@ import {
   path,
 } from "./lib.js";
 import { expandSchemaWithExtensions } from "./pipeline.js";
+import {
+  discoverV1WorkspacePermissionDeclarations,
+} from "./declarative-extensions.js";
+import { generatePreview } from "./preview.js";
 
 async function main() {
   const args = process.argv.slice(2);
   const emitMetadata = args.includes("--metadata");
   const emitUnifiedJsonSchema = args.includes("--unified-jsonschema");
   const emitIR = args.includes("--ir");
+  const emitPreview = args.includes("--preview");
   const lenientExtensions = args.includes("--lenient-extensions");
   const mainFile =
     args.find((a) => !a.startsWith("--")) ||
@@ -46,7 +51,10 @@ async function main() {
     `Discovered ${resources.length} resources, ${extensions.length} V1WorkspacePermission extensions, expanded to ${fullSchema.length} resource defs.`,
   );
 
-  if (emitIR) {
+  if (emitPreview) {
+    const declared = discoverV1WorkspacePermissionDeclarations(program);
+    console.log(generatePreview(declared));
+  } else if (emitIR) {
     const irIndex = args.indexOf("--ir");
     const nextArg = args[irIndex + 1];
     const outPath = nextArg && !nextArg.startsWith("--")

@@ -18,11 +18,14 @@ IR_OUT    := go-consumer/schema/resources.json
 GO_BIN    := go-consumer/bin/schema-consumer
 SAMPLES   := samples/demo-output.txt
 
-.PHONY: all clean compile emit-ir emit-spicedb emit-metadata demo run samples run-consumer go-build
+.PHONY: all clean build compile emit-ir emit-spicedb emit-metadata demo run samples run-consumer go-build
 
-all: compile emit-ir go-build
+all: build compile emit-ir go-build
 
-compile:
+build:
+	npx tsc -p tsconfig.build.json
+
+compile: build
 	$(TSP) compile $(MAIN_TSP)
 
 emit-ir:
@@ -65,4 +68,4 @@ emit-metadata:
 
 clean:
 	rm -f $(IR_OUT) $(GO_BIN)
-	rm -rf tsp-output/
+	rm -rf tsp-output/ dist/
