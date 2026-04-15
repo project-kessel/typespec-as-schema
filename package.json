@@ -2,7 +2,6 @@
   "name": "typespec-as-schema",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
   "scripts": {
     "test": "vitest run",
     "compile": "tsp compile schema/main.tsp",

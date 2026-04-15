@@ -1,8 +1,7 @@
 // Declarative Extension Applicator (Option A)
 //
 // Reads structured patch declarations from V1WorkspacePermission template
-// instances and applies them generically to ResourceDef[], replacing the
-// hardcoded buildSchemaFromTypeGraph().
+// instances and applies them generically to ResourceDef[].
 //
 // The patch rules live in TypeSpec (owned by the RBAC team) via the
 // kessel-extensions.tsp library. This emitter code is extension-agnostic:
@@ -10,10 +9,30 @@
 // public, accumulate, addField) but has zero knowledge of specific
 // extension patterns like workspace_permission or view_metadata.
 
-import type { Program, Model, Type, Namespace } from "@typespec/compiler";
-import { isTemplateInstance } from "@typespec/compiler";
-import type { ResourceDef, RelationDef, RelationBody } from "./lib.js";
-import { getNamespaceFQN, parsePermissionExpr } from "./lib.js";
+import type { Program, Model, Type } from "@typespec/compiler";
+import { isTemplateInstance, navigateProgram } from "@typespec/compiler";
+import type { ResourceDef, RelationDef, RelationBody, V1Extension } from "./lib.js";
+import {
+  findV1PermissionTemplate,
+  getNamespaceFQN,
+  isInstanceOf,
+  parsePermissionExpr,
+} from "./lib.js";
+
+const DISCOVER_DEBUG =
+  typeof process !== "undefined" &&
+  process.env &&
+  (process.env.DISCOVER_DEBUG === "1" ||
+    process.env.TYPESPEC_DISCOVER_DEBUG === "1");
+
+function discoverDebugWarn(message: string, err?: unknown): void {
+  if (!DISCOVER_DEBUG) return;
+  if (err !== undefined) {
+    console.warn(`[typespec-as-schema discover] ${message}`, err);
+  } else {
+    console.warn(`[typespec-as-schema discover] ${message}`);
+  }
+}
 
 // ─── Errors ───────────────────────────────────────────────────────────
 
@@ -43,15 +62,69 @@ export interface DeclaredExtension {
   patchRules: PatchRule[];
 }
 
-export interface PatchRule {
+interface PatchRule {
   target: string;       // "role" | "roleBinding" | "workspace" | "jsonSchema"
   patchType: string;    // "boolRelations" | "permission" | "public" | "accumulate" | "addField"
   rawValue: string;     // template with {app}, {res}, {verb}, {v2} placeholders
 }
 
+/**
+ * Frozen copy of patch-rule properties on `Kessel.V1WorkspacePermission` in
+ * `lib/kessel-extensions.tsp`. Keep aligned when that template changes.
+ */
+export const V1_WORKSPACE_PERMISSION_TEMPLATE_RULES: readonly PatchRule[] = [
+  {
+    target: "role",
+    patchType: "boolRelations",
+    rawValue: "{app}_any_any,{app}_{res}_any,{app}_any_{verb},{app}_{res}_{verb}",
+  },
+  {
+    target: "role",
+    patchType: "permission",
+    rawValue:
+      "{v2}=any_any_any | {app}_any_any | {app}_{res}_any | {app}_any_{verb} | {app}_{res}_{verb}",
+  },
+  {
+    target: "roleBinding",
+    patchType: "permission",
+    rawValue: "{v2}=subject & granted->{v2}",
+  },
+  {
+    target: "workspace",
+    patchType: "permission",
+    rawValue: "{v2}=binding->{v2} | parent->{v2}",
+  },
+  { target: "workspace", patchType: "public", rawValue: "{v2}" },
+  {
+    target: "workspace",
+    patchType: "accumulate",
+    rawValue: "view_metadata=or({v2}),when={verb}==read,public=true",
+  },
+  {
+    target: "jsonSchema",
+    patchType: "addField",
+    rawValue: "{v2}_id=string:uuid,required=true",
+  },
+];
+
+/** Build declarative extension instances from V1 triples (for tests and tooling without a TypeSpec Program). */
+export function declaredExtensionsFromV1Extensions(
+  exts: V1Extension[],
+): DeclaredExtension[] {
+  return exts.map((ext) => ({
+    params: {
+      application: ext.application,
+      resource: ext.resource,
+      verb: ext.verb,
+      v2Perm: ext.v2Perm,
+    },
+    patchRules: [...V1_WORKSPACE_PERMISSION_TEMPLATE_RULES],
+  }));
+}
+
 // ─── Accumulate Rule ─────────────────────────────────────────────────
 
-export interface AccumulateRule {
+interface AccumulateRule {
   name: string;         // target relation name (e.g., "view_metadata")
   op: string;           // merge operator (e.g., "or")
   ref: string;          // per-instance ref template (e.g., "{v2}")
@@ -146,43 +219,125 @@ function getStringValue(t: Type): string | undefined {
   return undefined;
 }
 
-function findExtensionTemplate(program: Program, templateName: string): Model | null {
-  const globalNs = program.getGlobalNamespaceType();
-  function search(ns: Namespace): Model | null {
-    for (const [, model] of ns.models) {
-      if (model.name === templateName) return model;
-    }
-    for (const [, childNs] of ns.namespaces) {
-      const found = search(childNs);
-      if (found) return found;
-    }
-    return null;
-  }
-  return search(globalNs);
-}
-
-function isInstanceOfTemplate(model: Model, template: Model): boolean {
-  if (!isTemplateInstance(model)) return false;
-  if (model.sourceModel === template) return true;
-  if (model.templateNode === template.node) return true;
-  if (
-    model.name === template.name &&
-    getNamespaceFQN(model.namespace) === getNamespaceFQN(template.namespace)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 const PARAM_NAMES = ["application", "resource", "verb", "v2Perm"] as const;
 const PATCH_TARGETS = ["role", "roleBinding", "workspace", "jsonSchema"] as const;
 
-export function discoverDeclaredExtensions(program: Program): DeclaredExtension[] {
-  const template = findExtensionTemplate(program, "V1WorkspacePermission");
+/**
+ * Read `{target}_{patchType}` default string rules from the compiled
+ * `V1WorkspacePermission` template (source: `lib/kessel-extensions.tsp`).
+ * Used by tests to ensure {@link V1_WORKSPACE_PERMISSION_TEMPLATE_RULES} stays aligned.
+ */
+export function readDefaultPatchRulesFromTemplate(program: Program): PatchRule[] {
+  const template = findV1PermissionTemplate(program);
+  if (!template) return [];
+
+  const rules: PatchRule[] = [];
+  for (const [name, prop] of template.properties) {
+    if ((PARAM_NAMES as readonly string[]).includes(name)) continue;
+
+    const separatorIdx = name.indexOf("_");
+    if (separatorIdx === -1) continue;
+
+    const target = name.slice(0, separatorIdx);
+    const patchType = name.slice(separatorIdx + 1);
+
+    if (!(PATCH_TARGETS as readonly string[]).includes(target)) continue;
+
+    const value = getStringValue(prop.type);
+    if (!value) continue;
+
+    rules.push({ target, patchType, rawValue: value });
+  }
+
+  return rules;
+}
+
+function patchRuleSortKey(r: PatchRule): string {
+  return `${r.target}\0${r.patchType}\0${r.rawValue}`;
+}
+
+/** Stable-sort patch rules for equality comparisons. */
+export function sortPatchRules(rules: readonly PatchRule[]): PatchRule[] {
+  return [...rules].sort((a, b) =>
+    patchRuleSortKey(a).localeCompare(patchRuleSortKey(b)),
+  );
+}
+
+/** Extract params + patch rules from a V1WorkspacePermission template instance model. */
+function declaredExtensionFromModel(model: Model): DeclaredExtension | null {
+  const params: Record<string, string> = {};
+  const patchRules: PatchRule[] = [];
+
+  for (const [name, prop] of model.properties) {
+    const value = getStringValue(prop.type);
+    if (!value) continue;
+
+    if ((PARAM_NAMES as readonly string[]).includes(name)) {
+      params[name] = value;
+      continue;
+    }
+
+    const separatorIdx = name.indexOf("_");
+    if (separatorIdx === -1) continue;
+
+    const target = name.slice(0, separatorIdx);
+    const patchType = name.slice(separatorIdx + 1);
+
+    if ((PATCH_TARGETS as readonly string[]).includes(target)) {
+      patchRules.push({ target, patchType, rawValue: value });
+    }
+  }
+
+  if (
+    !params.application ||
+    !params.resource ||
+    !params.verb ||
+    !params.v2Perm
+  ) {
+    return null;
+  }
+
+  return { params, patchRules };
+}
+
+function pushDeclaredUnique(
+  results: DeclaredExtension[],
+  seen: Set<string>,
+  decl: DeclaredExtension,
+): void {
+  const key = decl.params.v2Perm ?? JSON.stringify(decl.params);
+  if (seen.has(key)) return;
+  seen.add(key);
+  results.push(decl);
+}
+
+/**
+ * Single discovery path for V1WorkspacePermission: program models (navigateProgram)
+ * plus top-level alias statements. Dedupes by `v2Perm`. Drives both patch
+ * application and IR `extensions` (via {@link v1ExtensionsFromDeclarations}).
+ */
+export function discoverV1WorkspacePermissionDeclarations(
+  program: Program,
+): DeclaredExtension[] {
+  const template = findV1PermissionTemplate(program);
   if (!template) return [];
 
   const results: DeclaredExtension[] = [];
   const seen = new Set<string>();
+
+  navigateProgram(program, {
+    model(model: Model) {
+      if (model.templateNode && !isTemplateInstance(model)) return;
+
+      const modelNsFQN = getNamespaceFQN(model.namespace);
+      if (modelNsFQN.endsWith("Kessel")) return;
+
+      if (!isInstanceOf(model, template)) return;
+
+      const decl = declaredExtensionFromModel(model);
+      if (decl) pushDeclaredUnique(results, seen, decl);
+    },
+  });
 
   for (const [, sourceFile] of program.sourceFiles) {
     for (const statement of sourceFile.statements) {
@@ -190,44 +345,31 @@ export function discoverDeclaredExtensions(program: Program): DeclaredExtension[
       try {
         const aliasType = program.checker.getTypeForNode(statement);
         if (!aliasType || aliasType.kind !== "Model") continue;
-        if (!isInstanceOfTemplate(aliasType as Model, template)) continue;
+        if (!isInstanceOf(aliasType as Model, template)) continue;
 
-        const model = aliasType as Model;
-        const params: Record<string, string> = {};
-        const patchRules: PatchRule[] = [];
-
-        for (const [name, prop] of model.properties) {
-          const value = getStringValue(prop.type);
-          if (!value) continue;
-
-          if ((PARAM_NAMES as readonly string[]).includes(name)) {
-            params[name] = value;
-            continue;
-          }
-
-          const separatorIdx = name.indexOf("_");
-          if (separatorIdx === -1) continue;
-
-          const target = name.slice(0, separatorIdx);
-          const patchType = name.slice(separatorIdx + 1);
-
-          if ((PATCH_TARGETS as readonly string[]).includes(target)) {
-            patchRules.push({ target, patchType, rawValue: value });
-          }
-        }
-
-        const key = params.v2Perm ?? JSON.stringify(params);
-        if (!seen.has(key)) {
-          seen.add(key);
-          results.push({ params, patchRules });
-        }
-      } catch {
-        // Skip nodes that can't be resolved
+        const decl = declaredExtensionFromModel(aliasType as Model);
+        if (decl) pushDeclaredUnique(results, seen, decl);
+      } catch (err) {
+        discoverDebugWarn("skipped source statement during V1 alias scan", err);
       }
     }
   }
 
   return results;
+}
+
+/** Derive slim extension list for IR / metadata from unified declarations. */
+export function v1ExtensionsFromDeclarations(
+  declared: DeclaredExtension[],
+): V1Extension[] {
+  const out: V1Extension[] = [];
+  for (const d of declared) {
+    const { application, resource, verb, v2Perm } = d.params;
+    if (application && resource && verb && v2Perm) {
+      out.push({ application, resource, verb, v2Perm });
+    }
+  }
+  return out;
 }
 
 // ─── Interpolation ───────────────────────────────────────────────────
@@ -263,7 +405,7 @@ function parsePermissionRule(value: string): RelationDef | null {
 
 // ─── Result Types ────────────────────────────────────────────────────
 
-export interface DeclaredPatchResult {
+interface DeclaredPatchResult {
   resources: ResourceDef[];
   jsonSchemaFields: JsonSchemaFieldRule[];
 }

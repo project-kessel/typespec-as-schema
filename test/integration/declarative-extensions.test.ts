@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { compileAndDiscover } from "../../src/compile-and-discover.js";
 import {
-  compileAndDiscover,
-  buildSchemaFromTypeGraph,
   generateSpiceDB,
   generateUnifiedJsonSchemas,
   type ResourceDef,
@@ -11,7 +10,8 @@ import {
   type V1Extension,
 } from "../../src/lib.js";
 import {
-  discoverDeclaredExtensions,
+  discoverV1WorkspacePermissionDeclarations,
+  v1ExtensionsFromDeclarations,
   type DeclaredExtension,
   type JsonSchemaFieldRule,
 } from "../../src/declarative-extensions.js";
@@ -33,7 +33,9 @@ beforeAll(async () => {
   const discovered = await compileAndDiscover(mainTsp);
   resources = discovered.resources;
   extensions = discovered.extensions;
-  declaredExtensions = discoverDeclaredExtensions(discovered.program);
+  declaredExtensions = discoverV1WorkspacePermissionDeclarations(
+    discovered.program,
+  );
   const expanded = expandSchemaWithExtensions(discovered.program, resources);
   fullSchema = expanded.fullSchema;
   jsonSchemaFields = expanded.jsonSchemaFields;
@@ -82,23 +84,19 @@ function parseZedDefinitions(zedText: string): Map<string, DefinitionBlock> {
   return blocks;
 }
 
-// ─── Regression: legacy expander ─────────────────────────────────────
-
-describe("expandSchemaWithExtensions vs buildSchemaFromTypeGraph", () => {
-  it("produces the same ResourceDef graph as the legacy hardcoded expander", () => {
-    const legacy = buildSchemaFromTypeGraph(resources, extensions);
-    expect(fullSchema).toEqual(legacy);
-  });
-
-  it("produces identical SpiceDB text to the legacy expander", () => {
-    const legacy = buildSchemaFromTypeGraph(resources, extensions);
-    expect(generateSpiceDB(fullSchema)).toBe(generateSpiceDB(legacy));
-  });
-});
-
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
 describe("Declarative extension discovery", () => {
+  it("IR extensions match declarations derived from the same program", () => {
+    const fromDeclared = v1ExtensionsFromDeclarations(declaredExtensions)
+      .slice()
+      .sort((a, b) => a.v2Perm.localeCompare(b.v2Perm));
+    const fromCompile = extensions
+      .slice()
+      .sort((a, b) => a.v2Perm.localeCompare(b.v2Perm));
+    expect(fromDeclared).toEqual(fromCompile);
+  });
+
   it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
     expect(declaredExtensions).toHaveLength(4);
   });

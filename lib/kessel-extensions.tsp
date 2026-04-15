@@ -4,6 +4,10 @@
 // The generic emitter reads these rules and applies patches to the model
 // without any extension-specific code.
 //
+// Keep in sync: `V1WorkspacePermission` patch properties are mirrored for tests
+// in `src/declarative-extensions.ts` as `V1_WORKSPACE_PERMISSION_TEMPLATE_RULES`.
+// CI: `test/unit/template-rules-drift.test.ts` compares this template to that array.
+//
 // Patch-rule property naming convention:
 //   {target}_{patchType}
 //

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { compileAndDiscover } from "../../src/compile-and-discover.js";
 import {
-  compileAndDiscover,
   generateSpiceDB,
   generateMetadata,
   type ResourceDef,

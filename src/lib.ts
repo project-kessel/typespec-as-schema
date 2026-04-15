@@ -45,16 +45,16 @@ export function camelToSnake(s: string): string {
   return s.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
 
-export function isKesselType(model: Model, expectedName: string): boolean {
+function isKesselType(model: Model, expectedName: string): boolean {
   return model.name === expectedName && getNamespaceFQN(model.namespace).endsWith("Kessel");
 }
 
-export function getTemplateArg(model: Model, index: number): Type | undefined {
+function getTemplateArg(model: Model, index: number): Type | undefined {
   if (!isTemplateInstance(model)) return undefined;
   return model.templateMapper?.args?.[index] as Type | undefined;
 }
 
-export function getEnumMemberName(t: Type | undefined): string | undefined {
+function getEnumMemberName(t: Type | undefined): string | undefined {
   if (!t) return undefined;
   if (t.kind === "EnumMember") return t.name;
   // Template args may be wrapped in a Value object with a .type property
@@ -71,37 +71,16 @@ export interface V1Extension {
   v2Perm: string;
 }
 
-export function extractV1Extension(model: Model): V1Extension | null {
-  const props: Record<string, string> = {};
-  for (const [name, prop] of model.properties) {
-    const propType = prop.type;
-    if (propType.kind === "Scalar" && propType.name) {
-      props[name] = propType.name;
-    }
-    if ("value" in propType) {
-      props[name] = String((propType as any).value);
-    }
-  }
-
-  if (props.application && props.resource && props.verb && props.v2Perm) {
-    return {
-      application: props.application,
-      resource: props.resource,
-      verb: props.verb,
-      v2Perm: props.v2Perm,
-    };
-  }
-  return null;
-}
-
+/**
+ * Discovers service resource models only. V1WorkspacePermission instances are
+ * handled by `discoverV1WorkspacePermissionDeclarations` in declarative-extensions.ts
+ * (single source for IR metadata and patch application).
+ */
 export function discoverResources(program: Program): {
   resources: ResourceDef[];
-  extensions: V1Extension[];
 } {
   const resources: ResourceDef[] = [];
-  const extensions: V1Extension[] = [];
   const seenResources = new Set<string>();
-  const seenExtensions = new Set<string>();
 
   const v1PermTemplate = findV1PermissionTemplate(program);
 
@@ -113,11 +92,6 @@ export function discoverResources(program: Program): {
       if (modelNsFQN.endsWith("Kessel")) return;
 
       if (v1PermTemplate && isInstanceOf(model, v1PermTemplate)) {
-        const ext = extractV1Extension(model);
-        if (ext && !seenExtensions.has(ext.v2Perm)) {
-          seenExtensions.add(ext.v2Perm);
-          extensions.push(ext);
-        }
         return;
       }
 
@@ -136,28 +110,7 @@ export function discoverResources(program: Program): {
     },
   });
 
-  for (const [, sourceFile] of program.sourceFiles) {
-    for (const statement of sourceFile.statements) {
-      if ("value" in statement && "id" in statement) {
-        try {
-          const aliasType = program.checker.getTypeForNode(statement);
-          if (aliasType && aliasType.kind === "Model" && v1PermTemplate) {
-            if (isInstanceOf(aliasType, v1PermTemplate)) {
-              const ext = extractV1Extension(aliasType);
-              if (ext && !seenExtensions.has(ext.v2Perm)) {
-                seenExtensions.add(ext.v2Perm);
-                extensions.push(ext);
-              }
-            }
-          }
-        } catch {
-          // Skip nodes that can't be resolved
-        }
-      }
-    }
-  }
-
-  return { resources, extensions };
+  return { resources };
 }
 
 /** Template for workspace-scoped v1→v2 permission extensions (patch rules in kessel-extensions.tsp). */
@@ -189,7 +142,7 @@ export function isInstanceOf(model: Model, template: Model): boolean {
   return false;
 }
 
-export function modelToResource(
+function modelToResource(
   model: Model,
   nsPrefix: string
 ): ResourceDef | null {
@@ -249,7 +202,7 @@ export function modelToResource(
   };
 }
 
-export function resolveTargetName(t: Type | undefined): string {
+function resolveTargetName(t: Type | undefined): string {
   if (!t) return "unknown";
   if (t.kind === "Model") {
     const ns = getNamespaceFQN(t.namespace)?.toLowerCase() || "";
@@ -298,109 +251,6 @@ export function parsePermissionExpr(expr: string): RelationBody | null {
   return { kind: "ref", name: expr };
 }
 
-export function buildSchemaFromTypeGraph(
-  resources: ResourceDef[],
-  extensions: V1Extension[]
-): ResourceDef[] {
-  const roleExtraRelations: RelationDef[] = [];
-  const roleBindingExtraRelations: RelationDef[] = [];
-  const workspaceExtraRelations: RelationDef[] = [];
-  const addedBoolPerms = new Set<string>();
-  const viewMetadataMembers: string[] = [];
-
-  for (const ext of extensions) {
-    const appAdmin = `${ext.application}_any_any`;
-    const anyResource = `${ext.application}_${ext.resource}_any`;
-    const anyVerb = `${ext.application}_any_${ext.verb}`;
-    const v1Perm = `${ext.application}_${ext.resource}_${ext.verb}`;
-
-    for (const perm of [appAdmin, anyResource, anyVerb, v1Perm]) {
-      if (!addedBoolPerms.has(perm)) {
-        addedBoolPerms.add(perm);
-        roleExtraRelations.push({
-          name: perm,
-          body: { kind: "bool", target: "rbac/principal" },
-        });
-      }
-    }
-
-    roleExtraRelations.push({
-      name: ext.v2Perm,
-      body: {
-        kind: "or",
-        members: [
-          { kind: "ref", name: "any_any_any" },
-          { kind: "ref", name: appAdmin },
-          { kind: "ref", name: anyResource },
-          { kind: "ref", name: anyVerb },
-          { kind: "ref", name: v1Perm },
-        ],
-      },
-    });
-
-    roleBindingExtraRelations.push({
-      name: ext.v2Perm,
-      body: {
-        kind: "and",
-        members: [
-          { kind: "ref", name: "subject" },
-          { kind: "subref", name: "t_granted", subname: ext.v2Perm },
-        ],
-      },
-    });
-
-    workspaceExtraRelations.push({
-      name: ext.v2Perm,
-      body: {
-        kind: "or",
-        members: [
-          { kind: "subref", name: "t_binding", subname: ext.v2Perm },
-          { kind: "subref", name: "t_parent", subname: ext.v2Perm },
-        ],
-      },
-      isPublic: true,
-    });
-
-    if (ext.verb === "read") {
-      viewMetadataMembers.push(ext.v2Perm);
-    }
-  }
-
-  if (viewMetadataMembers.length > 0) {
-    workspaceExtraRelations.push({
-      name: "view_metadata",
-      body: {
-        kind: "or",
-        members: viewMetadataMembers.map((m) => ({ kind: "ref" as const, name: m })),
-      },
-      isPublic: true,
-    });
-  }
-
-  const result: ResourceDef[] = [];
-  for (const res of resources) {
-    const merged = { ...res, relations: [...res.relations] };
-
-    if (res.name === "role" && res.namespace === "rbac") {
-      merged.relations.push(...roleExtraRelations);
-    }
-    if (res.name === "role_binding" && res.namespace === "rbac") {
-      merged.relations.push(...roleBindingExtraRelations);
-    }
-    if (res.name === "workspace" && res.namespace === "rbac") {
-      merged.relations.push(...workspaceExtraRelations);
-    }
-
-    result.push(merged);
-  }
-
-  if (!result.some((r) => r.name === "principal" && r.namespace === "rbac")) {
-    result.unshift({ name: "principal", namespace: "rbac", relations: [] });
-  }
-
-  return result;
-}
-
 export function bodyToZed(body: RelationBody): string {
   switch (body.kind) {
     case "assignable":
@@ -420,7 +270,7 @@ export function bodyToZed(body: RelationBody): string {
   }
 }
 
-export function isAssignable(body: RelationBody): boolean {
+function isAssignable(body: RelationBody): boolean {
   return body.kind === "assignable" || body.kind === "bool";
 }
 
@@ -562,7 +412,7 @@ export function generateUnifiedJsonSchemas(
   return schemas;
 }
 
-export interface ServiceMetadata {
+interface ServiceMetadata {
   permissions: string[];
   resources: string[];
 }
@@ -592,7 +442,7 @@ export function generateMetadata(
   return metadata;
 }
 
-export interface IntermediateRepresentation {
+interface IntermediateRepresentation {
   version: string;
   generatedAt: string;
   source: string;
@@ -622,19 +472,3 @@ export function generateIR(
 }
 
 export { compile, NodeHost, path };
-
-export async function compileAndDiscover(mainFile: string) {
-  const resolvedMain = path.resolve(mainFile);
-  const program = await compile(NodeHost, resolvedMain, { noEmit: true });
-
-  const hasErrors = program.diagnostics.some((d) => d.severity === "error");
-  if (hasErrors) {
-    const msgs = program.diagnostics
-      .filter((d) => d.severity === "error")
-      .map((d) => d.message);
-    throw new Error(`Compilation failed:\n${msgs.join("\n")}`);
-  }
-
-  const { resources, extensions } = discoverResources(program);
-  return { resources, extensions, program };
-}

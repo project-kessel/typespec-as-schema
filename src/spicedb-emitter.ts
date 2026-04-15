@@ -12,8 +12,8 @@
 // Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--lenient-extensions]
 
 import * as fs from "fs";
+import { compileAndDiscover } from "./compile-and-discover.js";
 import {
-  compileAndDiscover,
   generateSpiceDB,
   generateMetadata,
   generateUnifiedJsonSchemas,
