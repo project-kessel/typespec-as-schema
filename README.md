@@ -42,13 +42,79 @@ TypeSpec Compiler (tsp compile schema/main.tsp)
               → stdout / --ir / --metadata / --unified-jsonschema
 ```
 
-Services register permissions with **`Kessel.V1WorkspacePermission<...>`** (`lib/kessel-extensions.tsp`). **`applyDeclaredPatches`** lives in `src/declarative-extensions.ts`; **`expandSchemaWithExtensions`** in `src/pipeline.ts`. `buildSchemaFromTypeGraph` in `src/lib.ts` is a **legacy reference** for tests.
+Services register permissions with **`Kessel.V1WorkspacePermission<...>`** (`lib/kessel-extensions.tsp`). **`discoverV1WorkspacePermissionDeclarations`** and **`applyDeclaredPatches`** live in `src/declarative-extensions.ts`; **`expandSchemaWithExtensions`** in `src/pipeline.ts`; **`compileAndDiscover`** in `src/compile-and-discover.ts` (wires compile → resource discovery → unified V1 discovery → `extensions` for IR). Unit tests that do not load a TypeSpec program use **`declaredExtensionsFromV1Extensions`** plus `applyDeclaredPatches` (`V1_WORKSPACE_PERMISSION_TEMPLATE_RULES` must match the template defaults in `lib/kessel-extensions.tsp`; **`test/unit/template-rules-drift.test.ts`** fails if they drift).
 
-## Cross-links (evaluation)
+### Debug: discovery warnings
 
-- Jira [RHCLOUD-44305](https://redhat.atlassian.net/browse/RHCLOUD-44305); internal design docs for schema unification program (evaluation).
-- Repo: `poc/typespec-as-schema/`.
-- [docs/Extension-Decoupling-Design.md](docs/Extension-Decoupling-Design.md).
+If extension discovery skips a source node (checker error), set **`DISCOVER_DEBUG=1`** or **`TYPESPEC_DISCOVER_DEBUG=1`** to log `console.warn` details. Default behavior remains non-throwing for those nodes.
+
+### Permission expressions
+
+The emitter’s `parsePermissionExpr` maps `Permission<"...">` **string** bodies to an internal `RelationBody` tree. Only this **subset** is supported (enough for the benchmark and declarative patches):
+
+- **Single reference:** `binding`, `subject`, `any_any_any`, … → `ref`
+- **Subreference:** `binding->granted` or `t_binding->granted` style (dot form without spaces: `a.b`) → `subref` with `t_`-prefixed relation name where applicable
+- **Union:** operands joined by **` | `** or **` + `** → `or` (each operand may use `name->sub` for subref)
+- **Intersection:** operands joined by **` & `** → `and` (same `->` rule as union members)
+
+Expressions mixing `&` and `|` on one line without grouping, or other Zed features, are **not** modeled; extend [`src/lib.ts`](src/lib.ts) `parsePermissionExpr` if you need more.
+
+### How to validate end-to-end
+
+From `poc/typespec-as-schema/`:
+
+1. **Install deps (once)**
+
+   ```bash
+   npm install
+   ```
+
+2. **Full compile**
+
+   ```bash
+   make compile
+   ```
+
+   Confirms `schema/main.tsp` + imports type-check and the built-in JSON Schema emit runs.
+
+3. **Automated tests**
+
+   ```bash
+   npx vitest run
+   ```
+
+   Covers declarative extensions, SpiceDB output, unified JSON Schema scoping, strict/lenient patches, and template-rule drift vs `kessel-extensions.tsp`.
+
+4. **Console tour (optional)**
+
+   ```bash
+   make demo
+   ```
+
+   or `make run` — SpiceDB snippet + metadata + unified JSON Schema fragment on stdout.
+
+5. **IR + Go path (no Node at runtime)**
+
+   ```bash
+   make emit-ir    # or: make all  # compile + IR + go-build
+   make go-build   # if you only ran emit-ir
+   ./go-consumer/bin/schema-consumer
+   ```
+
+   Confirms embedded IR loads and the Go binary prints resources/extensions.
+
+6. **Strict vs lenient (regression check)**
+
+   - Default: `npx tsx src/spicedb-emitter.ts schema/main.tsp` should succeed on the benchmark schema.
+   - If you intentionally break a patch string in `lib/kessel-extensions.tsp`, default should throw; `npx tsx src/spicedb-emitter.ts schema/main.tsp --lenient-extensions` should not throw (may skip bad rules).
+
+7. **Optional: refresh checked-in samples**
+
+   ```bash
+   make samples
+   ```
+
+   Regenerates `samples/demo-output.txt` for reviewers; diff if you care about golden output.
 
 ## Risks and tradeoffs
 
@@ -68,11 +134,9 @@ schema/
   rbac.tsp
   hbi.tsp
   remediations.tsp
-  policy.tsp
-  rbac-augment.tsp
-  hbi-augment.tsp
 src/
   spicedb-emitter.ts
+  compile-and-discover.ts
   lib.ts
   pipeline.ts
   declarative-extensions.ts
@@ -102,37 +166,3 @@ make samples
 # equivalent:
 make demo > samples/demo-output.txt 2>&1
 ```
-# How to validate end-to-end 
-From poc/typespec-as-schema/:
-
-1. Install deps (once)
-`npm install`
-
-2. Full compile
-`make compile`
-Confirms schema/main.tsp + imports type-check and built-in JSON Schema emit runs.
-
-3. Automated tests
-`npx vitest run`
-Covers declarative extensions, SpiceDB vs legacy expander, unified JSON Schema scoping, strict/lenient patches, etc.
-
-4. Console tour (optional)
-`make demo` or `make run`
-SpiceDB snippet + metadata + unified JSON Schema fragment on stdout.
-
-5. IR + Go path (no Node at runtime)
-
-```
-make emit-ir    # or: make all  # compile + IR + go-build
-make go-build   # if you only ran emit-ir
-./go-consumer/bin/schema-consumer
-```
-Confirms embedded IR loads and the Go binary prints resources/extensions.
-
-6. Strict vs lenient (regression check)
-
-* Default: npx tsx src/spicedb-emitter.ts schema/main.tsp should succeed on the benchmark schema.
-* If you intentionally break a patch string in lib/kessel-extensions.tsp, default should throw; ... --lenient-extensions should not throw (may skip bad rules).
-7. Optional: refresh checked-in samples
-`make samples`
-Regenerates samples/demo-output.txt for reviewers; diff if you care about golden output.
