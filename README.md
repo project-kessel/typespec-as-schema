@@ -30,19 +30,74 @@ npx tsx src/spicedb-emitter.ts schema/main.tsp
 
 ## Architecture
 
-```
-lib/*.tsp  +  schema/*.tsp
-    |
-    v
-TypeSpec Compiler (tsp compile schema/main.tsp)
-    |
-    +---> JSONSchema (built-in) → tsp-output/json-schema/
-    |
-    +---> src/spicedb-emitter.ts
-              → stdout / --ir / --metadata / --unified-jsonschema
+```mermaid
+flowchart TB
+  subgraph input ["Input (.tsp files)"]
+    lib["lib/kessel.tsp\nlib/kessel-extensions.tsp"]
+    rbac["schema/rbac.tsp"]
+    hbi["schema/hbi.tsp"]
+    rem["schema/remediations.tsp"]
+    main["schema/main.tsp"]
+  end
+
+  subgraph stage1 ["1. Compile and Discover (compile-and-discover.ts)"]
+    tsc["TypeSpec Compiler\n— compile with noEmit —"]
+    dr["discoverResources\n→ ResourceDef[]"]
+    dv1["discoverV1WorkspacePermission\nDeclarations → DeclaredExtension[]"]
+    v1e["v1ExtensionsFromDeclarations\n→ V1Extension[]"]
+  end
+
+  subgraph stage2 ["2. Expand (pipeline.ts)"]
+    expand["expandSchemaWithExtensions"]
+    apply["applyDeclaredPatches\n— merge onto role, role_binding, workspace —"]
+  end
+
+  subgraph stage3 ["3. Emit (spicedb-emitter.ts)"]
+    spicedb["SpiceDB/Zed\n(default stdout)"]
+    ir["resources.json\n(--ir)"]
+    meta["Metadata JSON\n(--metadata)"]
+    ujson["Unified JSON Schema\n(--unified-jsonschema)"]
+  end
+
+  subgraph builtin ["Built-in Emitter"]
+    jsonschema["@typespec/json-schema\n→ tsp-output/json-schema/"]
+  end
+
+  lib --> main
+  rbac --> main
+  hbi --> main
+  rem --> main
+  main --> tsc
+  tsc --> dr
+  tsc --> dv1
+  dv1 --> v1e
+  dr --> expand
+  dv1 --> expand
+  expand --> apply
+  apply --> spicedb
+  apply --> ir
+  apply --> meta
+  apply --> ujson
+  v1e --> ir
+  v1e --> meta
+  main --> jsonschema
 ```
 
-Services register permissions with **`Kessel.V1WorkspacePermission<...>`** (`lib/kessel-extensions.tsp`). **`discoverV1WorkspacePermissionDeclarations`** and **`applyDeclaredPatches`** live in `src/declarative-extensions.ts`; **`expandSchemaWithExtensions`** in `src/pipeline.ts`; **`compileAndDiscover`** in `src/compile-and-discover.ts` (wires compile → resource discovery → unified V1 discovery → `extensions` for IR). Unit tests that do not load a TypeSpec program use **`declaredExtensionsFromV1Extensions`** plus `applyDeclaredPatches` (`V1_WORKSPACE_PERMISSION_TEMPLATE_RULES` must match the template defaults in `lib/kessel-extensions.tsp`; **`test/unit/template-rules-drift.test.ts`** fails if they drift).
+### Pipeline
+
+Services register permissions by declaring aliases of **`Kessel.V1WorkspacePermission<App, Res, Verb, V2>`** in their `schema/*.tsp` file. Each alias carries four parameters (application, resource, verb, v2 permission name) and inherits declarative patch rules from the template in `lib/kessel-extensions.tsp`.
+
+The emitter pipeline has three stages:
+
+1. **Compile and discover** (`src/compile-and-discover.ts`) — compiles `schema/main.tsp` into a typed program, discovers base resource models (`discoverResources`), and discovers all `V1WorkspacePermission` instances (`discoverV1WorkspacePermissionDeclarations`) in a single pass.
+2. **Expand** (`src/pipeline.ts`) — `expandSchemaWithExtensions` re-runs V1 discovery on the program and applies declarative patches (`applyDeclaredPatches`) to merge extension-generated relations and permissions onto `rbac/role`, `rbac/role_binding`, and `rbac/workspace`.
+3. **Emit** (`src/spicedb-emitter.ts`) — produces SpiceDB/Zed text (default), IR JSON (`--ir`), per-service metadata (`--metadata`), or unified JSON Schema (`--unified-jsonschema`).
+
+All patch-rule parsing and application lives in `src/declarative-extensions.ts`. The emitter is extension-agnostic: it knows how to parse patch-rule syntax (`boolRelations`, `permission`, `public`, `accumulate`, `addField`) but has no knowledge of specific extension patterns.
+
+### Testing without a TypeSpec program
+
+Unit tests that need to exercise patch application without compiling `.tsp` files use `declaredExtensionsFromV1Extensions` to build `DeclaredExtension[]` from plain `V1Extension` objects. These rely on the frozen `V1_WORKSPACE_PERMISSION_TEMPLATE_RULES` array, which must stay in sync with the template defaults in `lib/kessel-extensions.tsp`. The drift guard at `test/unit/template-rules-drift.test.ts` compiles a minimal fixture and fails if the two diverge.
 
 ### Debug: discovery warnings
 
