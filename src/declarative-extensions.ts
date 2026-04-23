@@ -100,11 +100,6 @@ export const V1_WORKSPACE_PERMISSION_TEMPLATE_RULES: readonly PatchRule[] = [
     patchType: "accumulate",
     rawValue: "view_metadata=or({v2}),when={verb}==read,public=true",
   },
-  {
-    target: "jsonSchema",
-    patchType: "addField",
-    rawValue: "{v2}_id=string:uuid,required=true",
-  },
 ];
 
 /** Build declarative extension instances from V1 triples (for tests and tooling without a TypeSpec Program). */

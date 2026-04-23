@@ -60,13 +60,13 @@ describe("generatePreview", () => {
     expect(output).toContain("contributes inventory_host_read to view_metadata (when verb==read)");
   });
 
-  it("shows JSON Schema field additions", () => {
+  it("does not show JSON Schema field additions (removed from V1 template)", () => {
     const declared = makeDeclared([
       { application: "inventory", resource: "host", verb: "read", v2Perm: "inventory_host_read" },
     ]);
     const output = generatePreview(declared);
-    expect(output).toContain("inventory_host_read_id");
-    expect(output).toContain("string:uuid");
+    expect(output).not.toContain("inventory_host_read_id");
+    expect(output).not.toContain("json_schema");
   });
 
   it("handles multiple extensions", () => {

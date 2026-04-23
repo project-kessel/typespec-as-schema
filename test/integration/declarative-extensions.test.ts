@@ -111,28 +111,22 @@ describe("Declarative extension discovery", () => {
     ]);
   });
 
-  it("each instance has 7 patch rules (role, roleBinding, workspace, jsonSchema)", () => {
+  it("each instance has 6 patch rules (role, roleBinding, workspace)", () => {
     for (const ext of declaredExtensions) {
-      expect(ext.patchRules.length).toBe(7);
+      expect(ext.patchRules.length).toBe(6);
     }
   });
 
-  it("attaches application (and resource) to collected JSON Schema field rules", () => {
-    const inv = jsonSchemaFields.filter((f) => f.application === "inventory");
-    const rem = jsonSchemaFields.filter((f) => f.application === "remediations");
-    expect(inv).toHaveLength(2);
-    expect(rem).toHaveLength(2);
-    expect(inv.every((f) => f.resource === "hosts")).toBe(true);
-    expect(rem.every((f) => f.resource === "remediations")).toBe(true);
+  it("V1WorkspacePermission no longer generates jsonSchema_addField rules", () => {
+    expect(jsonSchemaFields).toHaveLength(0);
   });
 
-  it("patch rules cover role, roleBinding, workspace, and jsonSchema targets", () => {
+  it("patch rules cover role, roleBinding, and workspace targets", () => {
     for (const ext of declaredExtensions) {
       const targets = new Set(ext.patchRules.map((r) => r.target));
       expect(targets.has("role")).toBe(true);
       expect(targets.has("roleBinding")).toBe(true);
       expect(targets.has("workspace")).toBe(true);
-      expect(targets.has("jsonSchema")).toBe(true);
     }
   });
 
@@ -203,59 +197,23 @@ describe("Declarative extension: enriched model semantics", () => {
   });
 });
 
-// ─── JSON Schema patch tests ─────────────────────────────────────────
+// ─── JSON Schema tests ───────────────────────────────────────────────
 
-describe("Declarative extension: JSON Schema field patches", () => {
-  it("collects JSON Schema fields from extension instances", () => {
-    expect(jsonSchemaFields.length).toBeGreaterThan(0);
-  });
-
-  it("produces one field per extension instance (4 extensions = 4 fields)", () => {
-    expect(jsonSchemaFields).toHaveLength(4);
-  });
-
-  it("field names are interpolated from v2Perm", () => {
-    const names = jsonSchemaFields.map((f) => f.fieldName).sort();
-    expect(names).toEqual([
-      "inventory_host_update_id",
-      "inventory_host_view_id",
-      "remediations_remediation_update_id",
-      "remediations_remediation_view_id",
-    ]);
-  });
-
-  it("fields have correct type and format", () => {
-    for (const field of jsonSchemaFields) {
-      expect(field.fieldType).toBe("string");
-      expect(field.format).toBe("uuid");
-      expect(field.required).toBe(true);
-    }
-  });
-
-  it("JSON Schema output includes extension-declared fields on service resources", () => {
+describe("Declarative extension: Unified JSON Schema", () => {
+  it("relation-derived workspace_id field is present on inventory/host", () => {
     const hostSchema = unifiedJsonSchemas["inventory/host"];
     expect(hostSchema).toBeDefined();
-    expect(hostSchema.properties["inventory_host_view_id"]).toBeDefined();
-    expect(hostSchema.properties["inventory_host_view_id"].type).toBe("string");
-    expect(hostSchema.properties["inventory_host_view_id"].format).toBe("uuid");
-    expect(hostSchema.properties["inventory_host_view_id"].source).toBe("extension-declared");
+    expect(hostSchema.properties["workspace_id"]).toBeDefined();
+    expect(hostSchema.properties["workspace_id"].type).toBe("string");
+    expect(hostSchema.properties["workspace_id"].format).toBe("uuid");
+    expect(hostSchema.required).toContain("workspace_id");
   });
 
-  it("does not apply other services' jsonSchema_addField rules to inventory/host", () => {
+  it("no extension-declared permission ID fields appear on inventory/host", () => {
     const hostSchema = unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.properties["inventory_host_view_id"]).toBeUndefined();
+    expect(hostSchema.properties["inventory_host_update_id"]).toBeUndefined();
     expect(hostSchema.properties["remediations_remediation_view_id"]).toBeUndefined();
     expect(hostSchema.properties["remediations_remediation_update_id"]).toBeUndefined();
-  });
-
-  it("extension-declared required fields appear in the required array", () => {
-    const hostSchema = unifiedJsonSchemas["inventory/host"];
-    expect(hostSchema.required).toContain("inventory_host_view_id");
-    expect(hostSchema.required).toContain("inventory_host_update_id");
-  });
-
-  it("relation-derived fields (workspace_id) still present alongside extension fields", () => {
-    const hostSchema = unifiedJsonSchemas["inventory/host"];
-    expect(hostSchema.properties["workspace_id"]).toBeDefined();
-    expect(hostSchema.required).toContain("workspace_id");
   });
 });

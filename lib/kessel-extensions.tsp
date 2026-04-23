@@ -68,7 +68,4 @@ model V1WorkspacePermission<
 
   // Accumulate read-verb permissions into workspace.view_metadata (OR)
   workspace_accumulate: "view_metadata=or({v2}),when={verb}==read,public=true";
-
-  // Extension-generated writable relation → JSON Schema field on the service resource
-  jsonSchema_addField: "{v2}_id=string:uuid,required=true";
 }
