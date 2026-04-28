@@ -13,7 +13,6 @@ import * as path from "path";
 export interface RelationDef {
   name: string;
   body: RelationBody;
-  isPublic?: boolean;
 }
 
 export type RelationBody =
@@ -71,10 +70,12 @@ export interface V1Extension {
   v2Perm: string;
 }
 
+/** Extension template names to skip during resource discovery. */
+const EXTENSION_TEMPLATE_NAMES = ["V1WorkspacePermission"];
+
 /**
- * Discovers service resource models only. V1WorkspacePermission instances are
- * handled by `discoverV1WorkspacePermissionDeclarations` in declarative-extensions.ts
- * (single source for IR metadata and patch application).
+ * Discovers service resource models (not extension template instances).
+ * Extension instances are discovered separately in expand.ts.
  */
 export function discoverResources(program: Program): {
   resources: ResourceDef[];
@@ -82,7 +83,9 @@ export function discoverResources(program: Program): {
   const resources: ResourceDef[] = [];
   const seenResources = new Set<string>();
 
-  const v1PermTemplate = findV1PermissionTemplate(program);
+  const extensionTemplates = EXTENSION_TEMPLATE_NAMES
+    .map((name) => findExtensionTemplate(program, name))
+    .filter((m): m is Model => m !== null);
 
   navigateProgram(program, {
     model(model: Model) {
@@ -91,7 +94,7 @@ export function discoverResources(program: Program): {
       const modelNsFQN = getNamespaceFQN(model.namespace);
       if (modelNsFQN.endsWith("Kessel")) return;
 
-      if (v1PermTemplate && isInstanceOf(model, v1PermTemplate)) {
+      if (extensionTemplates.some((t) => isInstanceOf(model, t))) {
         return;
       }
 
@@ -113,12 +116,12 @@ export function discoverResources(program: Program): {
   return { resources };
 }
 
-/** Template for workspace-scoped v1→v2 permission extensions (patch rules in kessel-extensions.tsp). */
-export function findV1PermissionTemplate(program: Program): Model | null {
+/** Find an extension template by name in the Kessel namespace. */
+export function findExtensionTemplate(program: Program, templateName: string): Model | null {
   const globalNs = program.getGlobalNamespaceType();
   function search(ns: Namespace): Model | null {
     for (const [, model] of ns.models) {
-      if (model.name === "V1WorkspacePermission") return model;
+      if (model.name === templateName) return model;
     }
     for (const [, childNs] of ns.namespaces) {
       const found = search(childNs);
@@ -315,36 +318,8 @@ export interface UnifiedJsonSchema {
   required: string[];
 }
 
-export interface JsonSchemaExtraField {
-  fieldName: string;
-  fieldType: string;
-  format?: string;
-  required: boolean;
-  /** When set, only attach to resources in this namespace (lowercase). Omit = all non-rbac (legacy). */
-  application?: string;
-  /** Template `resource` param; narrows when several models share a namespace. */
-  resource?: string;
-}
-
-/**
- * Match TypeSpec model name (e.g. Host) to V1WorkspacePermission `resource` (e.g. hosts).
- */
-export function extensionResourceMatchesModel(
-  modelName: string,
-  resourceSlug: string | undefined,
-): boolean {
-  if (resourceSlug == null || resourceSlug === "") return true;
-  const m = modelName.toLowerCase();
-  const s = resourceSlug.toLowerCase();
-  if (m === s) return true;
-  if (s.length > 1 && s.endsWith("s") && m === s.slice(0, -1)) return true;
-  if (m.length > 1 && m.endsWith("s") && s === m.slice(0, -1)) return true;
-  return false;
-}
-
 export function generateUnifiedJsonSchemas(
   resources: ResourceDef[],
-  extraFields?: JsonSchemaExtraField[],
 ): Record<string, UnifiedJsonSchema> {
   const schemas: Record<string, UnifiedJsonSchema> = {};
 
@@ -373,33 +348,6 @@ export function generateUnifiedJsonSchemas(
           source: `relation ${rel.name}: ${rel.body.target} [ExactlyOne]`,
         };
         schema.required.push(idField);
-        hasContent = true;
-      }
-    }
-
-    if (extraFields) {
-      for (const field of extraFields) {
-        if (
-          field.application != null &&
-          field.application !== res.namespace
-        ) {
-          continue;
-        }
-        if (!extensionResourceMatchesModel(res.name, field.resource)) {
-          continue;
-        }
-        if (schema.properties[field.fieldName] != null) {
-          throw new Error(
-            `Unified JSON Schema: duplicate property "${field.fieldName}" on ${res.namespace}/${res.name}`,
-          );
-        }
-        const prop: { type: string; format?: string; source?: string } = {
-          type: field.fieldType,
-          source: "extension-declared",
-        };
-        if (field.format) prop.format = field.format;
-        schema.properties[field.fieldName] = prop;
-        if (field.required) schema.required.push(field.fieldName);
         hasContent = true;
       }
     }
@@ -457,7 +405,6 @@ export function generateIR(
   mainFile: string,
   fullSchema: ResourceDef[],
   extensions: V1Extension[],
-  jsonSchemaFields: JsonSchemaExtraField[] = [],
 ): IntermediateRepresentation {
   return {
     version: "1.1.0",
@@ -467,7 +414,7 @@ export function generateIR(
     extensions,
     spicedb: generateSpiceDB(fullSchema),
     metadata: generateMetadata(fullSchema, extensions),
-    jsonSchemas: generateUnifiedJsonSchemas(fullSchema, jsonSchemaFields),
+    jsonSchemas: generateUnifiedJsonSchemas(fullSchema),
   };
 }
 

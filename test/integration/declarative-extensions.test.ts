@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import * as path from "path";
 import { fileURLToPath } from "url";
-import { compileAndDiscover } from "../../src/compile-and-discover.js";
 import {
+  compile,
+  NodeHost,
+  discoverResources,
   generateSpiceDB,
   generateUnifiedJsonSchemas,
   type ResourceDef,
@@ -10,12 +12,9 @@ import {
   type V1Extension,
 } from "../../src/lib.js";
 import {
-  discoverV1WorkspacePermissionDeclarations,
-  v1ExtensionsFromDeclarations,
-  type DeclaredExtension,
-  type JsonSchemaFieldRule,
-} from "../../src/declarative-extensions.js";
-import { expandSchemaWithExtensions } from "../../src/pipeline.js";
+  discoverV1Permissions,
+  expandV1Permissions,
+} from "../../src/expand.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pocRoot = path.resolve(__dirname, "../..");
@@ -23,24 +22,17 @@ const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
 
 let fullSchema: ResourceDef[];
 let spicedbOutput: string;
-let declaredExtensions: DeclaredExtension[];
-let jsonSchemaFields: JsonSchemaFieldRule[];
 let unifiedJsonSchemas: Record<string, UnifiedJsonSchema>;
 let resources: ResourceDef[];
 let extensions: V1Extension[];
 
 beforeAll(async () => {
-  const discovered = await compileAndDiscover(mainTsp);
-  resources = discovered.resources;
-  extensions = discovered.extensions;
-  declaredExtensions = discoverV1WorkspacePermissionDeclarations(
-    discovered.program,
-  );
-  const expanded = expandSchemaWithExtensions(discovered.program, resources);
-  fullSchema = expanded.fullSchema;
-  jsonSchemaFields = expanded.jsonSchemaFields;
+  const program = await compile(NodeHost, mainTsp, { noEmit: true });
+  resources = discoverResources(program).resources;
+  extensions = discoverV1Permissions(program);
+  fullSchema = expandV1Permissions(resources, extensions);
   spicedbOutput = generateSpiceDB(fullSchema);
-  unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema, jsonSchemaFields);
+  unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema);
 }, 30_000);
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -86,23 +78,13 @@ function parseZedDefinitions(zedText: string): Map<string, DefinitionBlock> {
 
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
-describe("Declarative extension discovery", () => {
-  it("IR extensions match declarations derived from the same program", () => {
-    const fromDeclared = v1ExtensionsFromDeclarations(declaredExtensions)
-      .slice()
-      .sort((a, b) => a.v2Perm.localeCompare(b.v2Perm));
-    const fromCompile = extensions
-      .slice()
-      .sort((a, b) => a.v2Perm.localeCompare(b.v2Perm));
-    expect(fromDeclared).toEqual(fromCompile);
-  });
-
+describe("V1 permission discovery", () => {
   it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
-    expect(declaredExtensions).toHaveLength(4);
+    expect(extensions).toHaveLength(4);
   });
 
-  it("extracts correct parameters from each instance", () => {
-    const perms = declaredExtensions.map((e) => e.params.v2Perm).sort();
+  it("extracts correct v2Perm from each instance", () => {
+    const perms = extensions.map((e) => e.v2Perm).sort();
     expect(perms).toEqual([
       "inventory_host_update",
       "inventory_host_view",
@@ -111,40 +93,16 @@ describe("Declarative extension discovery", () => {
     ]);
   });
 
-  it("each instance has 6 patch rules (role, roleBinding, workspace)", () => {
-    for (const ext of declaredExtensions) {
-      expect(ext.patchRules.length).toBe(6);
-    }
-  });
-
-  it("V1WorkspacePermission no longer generates jsonSchema_addField rules", () => {
-    expect(jsonSchemaFields).toHaveLength(0);
-  });
-
-  it("patch rules cover role, roleBinding, and workspace targets", () => {
-    for (const ext of declaredExtensions) {
-      const targets = new Set(ext.patchRules.map((r) => r.target));
-      expect(targets.has("role")).toBe(true);
-      expect(targets.has("roleBinding")).toBe(true);
-      expect(targets.has("workspace")).toBe(true);
-    }
-  });
-
-  it("workspace accumulate rule encodes view_metadata", () => {
-    for (const ext of declaredExtensions) {
-      const accRule = ext.patchRules.find(
-        (r) => r.target === "workspace" && r.patchType === "accumulate",
-      );
-      expect(accRule).toBeDefined();
-      expect(accRule!.rawValue).toContain("view_metadata=or({v2})");
-      expect(accRule!.rawValue).toContain("when={verb}==read");
-    }
+  it("extracts correct application names", () => {
+    const apps = new Set(extensions.map((e) => e.application));
+    expect(apps.has("inventory")).toBe(true);
+    expect(apps.has("remediations")).toBe(true);
   });
 });
 
 // ─── SpiceDB smoke ───────────────────────────────────────────────────
 
-describe("Declarative pipeline: SpiceDB output", () => {
+describe("Expansion pipeline: SpiceDB output", () => {
   it("rbac/workspace view_metadata ORs read-verb permissions", () => {
     const defs = parseZedDefinitions(spicedbOutput);
     const vm = defs.get("rbac/workspace")!.permissions.find((p) => p.includes("view_metadata"))!;
@@ -155,7 +113,7 @@ describe("Declarative pipeline: SpiceDB output", () => {
 
 // ─── Semantic model tests ────────────────────────────────────────────
 
-describe("Declarative extension: enriched model semantics", () => {
+describe("Expansion: enriched model semantics", () => {
   it("role gets bool relations for each extension's hierarchy levels", () => {
     const role = fullSchema.find((r) => r.name === "role" && r.namespace === "rbac")!;
     const boolNames = role.relations
@@ -170,16 +128,7 @@ describe("Declarative extension: enriched model semantics", () => {
     expect(boolNames).toContain("inventory_hosts_write");
   });
 
-  it("workspace permissions are marked public", () => {
-    const ws = fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
-    const invView = ws.relations.find((r) => r.name === "inventory_host_view");
-    expect(invView?.isPublic).toBe(true);
-
-    const viewMeta = ws.relations.find((r) => r.name === "view_metadata");
-    expect(viewMeta?.isPublic).toBe(true);
-  });
-
-  it("view_metadata only accumulates read-verb extensions (via generic accumulate)", () => {
+  it("view_metadata only accumulates read-verb extensions", () => {
     const ws = fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
     const viewMeta = ws.relations.find((r) => r.name === "view_metadata")!;
 
@@ -197,23 +146,19 @@ describe("Declarative extension: enriched model semantics", () => {
   });
 });
 
-// ─── JSON Schema tests ───────────────────────────────────────────────
+// ─── Unified JSON Schema tests ───────────────────────────────────────
 
-describe("Declarative extension: Unified JSON Schema", () => {
-  it("relation-derived workspace_id field is present on inventory/host", () => {
+describe("Expansion: Unified JSON Schema", () => {
+  it("V1 extensions do not add _id fields for computed permissions", () => {
     const hostSchema = unifiedJsonSchemas["inventory/host"];
     expect(hostSchema).toBeDefined();
-    expect(hostSchema.properties["workspace_id"]).toBeDefined();
-    expect(hostSchema.properties["workspace_id"].type).toBe("string");
-    expect(hostSchema.properties["workspace_id"].format).toBe("uuid");
-    expect(hostSchema.required).toContain("workspace_id");
-  });
-
-  it("no extension-declared permission ID fields appear on inventory/host", () => {
-    const hostSchema = unifiedJsonSchemas["inventory/host"];
     expect(hostSchema.properties["inventory_host_view_id"]).toBeUndefined();
     expect(hostSchema.properties["inventory_host_update_id"]).toBeUndefined();
-    expect(hostSchema.properties["remediations_remediation_view_id"]).toBeUndefined();
-    expect(hostSchema.properties["remediations_remediation_update_id"]).toBeUndefined();
+  });
+
+  it("relation-derived workspace_id is still present from ExactlyOne assignable", () => {
+    const hostSchema = unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.properties["workspace_id"]).toBeDefined();
+    expect(hostSchema.required).toContain("workspace_id");
   });
 });
