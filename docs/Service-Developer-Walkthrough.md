@@ -18,10 +18,12 @@ v2/typespec-as-schema/
 │   └── remediations.tsp             Remediations service (service team owns)
 ├── src/                          <- PLATFORM-OWNED (don't touch)
 │   ├── types.ts                     Core interfaces
-│   ├── utils.ts                     Utilities (camelToSnake, bodyToZed, etc.)
+│   ├── utils.ts                     Shared helpers (bodyToZed, slotName, findResource, etc.)
 │   ├── parser.ts                    Permission expression parser
-│   ├── discover.ts                  Resource discovery from TypeSpec Program
-│   ├── expand.ts                    Extension discovery + expansion logic
+│   ├── registry.ts                  Extension template registry (names, params, namespaces)
+│   ├── discover.ts                  AST walking: resource + extension instance discovery
+│   ├── expand.ts                    Pure expansion math (no AST, no TypeSpec imports)
+│   ├── pipeline.ts                  Pipeline orchestration (compile → discover → expand → generate)
 │   ├── generate.ts                  Output generators (SpiceDB, JSON Schema, metadata, IR)
 │   ├── safety.ts                    Validation guards
 │   ├── lib.ts                       Barrel module re-exporting all public API
@@ -378,15 +380,17 @@ Every extension has two parts on opposite sides of a trust boundary:
   ──────────────────────────            ────────────────────────────
   Write alias declarations:             1. Template in kessel-extensions.tsp
                                            (parameter shape, no logic)
-  alias foo = Kessel.Template<           2. Discovery in expand.ts
-    "param1", "param2"                      (find all aliases of this template)
-  >;                                     3. Expansion in expand.ts
-                                            (bounded mutations, O(N))
-  Zero computation.                      4. Wire into spicedb-emitter.ts
-  Only type declarations.                   (call discover + expand in order)
+  alias foo = Kessel.Template<           2. Registry entry in registry.ts
+    "param1", "param2"                      (template name, params, namespace)
+  >;                                     3. Discovery in discover.ts
+                                            (AST walking, find all instances)
+  Zero computation.                      4. Expansion in expand.ts
+  Only type declarations.                   (bounded mutations, O(N), no AST)
+                                         5. Wire into pipeline.ts
+                                            (call discover + expand in order)
 ```
 
-Adding a new extension type means adding platform code (steps 1--4).
+Adding a new extension type means adding platform code (steps 1--5).
 Service authors then use it by writing alias declarations -- no
 TypeScript, no logic.
 
@@ -439,22 +443,20 @@ model ContingentPermission<
 }
 ```
 
-**`src/discover.ts`** -- register the template name:
+**`src/registry.ts`** -- register the template:
 
 ```typescript
-const EXTENSION_TEMPLATE_NAMES = [
-  "V1WorkspacePermission",
-  "ResourceAnnotation",
-  "CascadeDeletePolicy",
-  "ContingentPermission",     // <- add
+export const EXTENSION_TEMPLATES: readonly ExtensionTemplateDef[] = [
+  { templateName: "V1WorkspacePermission", paramNames: ["application", "resource", "verb", "v2Perm"], namespace: "Kessel" },
+  { templateName: "ResourceAnnotation",    paramNames: ["application", "resource", "key", "value"], namespace: "Kessel" },
+  { templateName: "CascadeDeletePolicy",   paramNames: ["childApplication", "childResource", "parentRelation"], namespace: "Kessel" },
+  { templateName: "ContingentPermission",  paramNames: ["first", "second", "contingent"], namespace: "Kessel" },  // <- add
 ];
 ```
 
-**`src/expand.ts`** -- add discovery and expansion:
+**`src/discover.ts`** -- add a discovery function (AST walking):
 
 ```typescript
-// ── ContingentPermission ────────────────────────────────────────────
-
 export interface ContingentExtension {
   first: string;
   second: string;
@@ -463,26 +465,26 @@ export interface ContingentExtension {
 
 export function discoverContingentPermissions(
   program: Program,
+  warnings?: DiscoveryWarnings,
 ): ContingentExtension[] {
-  return discoverInstances(program, "ContingentPermission", [
-    "first", "second", "contingent",
-  ]).filter(
-    (p) => p.first && p.second && p.contingent,
-  ) as ContingentExtension[];
+  const def = getTemplate("ContingentPermission");
+  const { results, skipped } = discoverInstances(program, def);
+  if (warnings) warnings.skipped.push(...skipped);
+  return results.filter(
+    (p): p is Record<string, string> & ContingentExtension =>
+      !!(p.first && p.second && p.contingent),
+  );
 }
+```
 
-/**
- * Each ContingentPermission adds one intersection to workspace.
- * workspace.{contingent} = {first} AND {second}
- */
+**`src/expand.ts`** -- add pure expansion logic (no TypeSpec imports):
+
+```typescript
 export function expandContingentPermissions(
   resources: ResourceDef[],
   extensions: ContingentExtension[],
 ): ResourceDef[] {
-  const result = resources.map((r) => ({
-    ...r,
-    relations: [...r.relations],
-  }));
+  const result = cloneResources(resources);
   const workspace = findResource(result, "rbac", "workspace");
   if (!workspace) return result;
 
@@ -497,17 +499,12 @@ export function expandContingentPermissions(
 }
 ```
 
-**`src/spicedb-emitter.ts`** -- wire into the pipeline:
+**`src/pipeline.ts`** -- wire into the pipeline:
 
 ```typescript
-import {
-  discoverContingentPermissions,
-  expandContingentPermissions,
-} from "./expand.js";
-
 // After V1 expansion:
-const contingentPerms = discoverContingentPermissions(program);
-fullSchema = expandContingentPermissions(fullSchema, contingentPerms);
+const contingentPerms = discoverContingentPermissions(program, discoveryWarnings);
+const contingentResult = expandContingentPermissions(expanded, contingentPerms);
 ```
 
 #### What service authors write
@@ -608,23 +605,19 @@ model ExposeHostPermission<
 }
 ```
 
-**`src/discover.ts`** -- register:
+**`src/registry.ts`** -- add to the registry:
 
 ```typescript
-const EXTENSION_TEMPLATE_NAMES = [
-  "V1WorkspacePermission",
-  "ResourceAnnotation",
-  "CascadeDeletePolicy",
-  "ContingentPermission",
-  "ExposeHostPermission",     // <- add
+export const EXTENSION_TEMPLATES: readonly ExtensionTemplateDef[] = [
+  // ... existing entries ...
+  { templateName: "ContingentPermission",  paramNames: ["first", "second", "contingent"], namespace: "Kessel" },
+  { templateName: "ExposeHostPermission",  paramNames: ["v2Perm", "hostPerm"], namespace: "Kessel" },  // <- add
 ];
 ```
 
-**`src/expand.ts`** -- discovery and expansion:
+**`src/discover.ts`** -- add discovery:
 
 ```typescript
-// ── ExposeHostPermission ────────────────────────────────────────────
-
 export interface ExposeHostExtension {
   v2Perm: string;
   hostPerm: string;
@@ -632,26 +625,26 @@ export interface ExposeHostExtension {
 
 export function discoverExposeHostPermissions(
   program: Program,
+  warnings?: DiscoveryWarnings,
 ): ExposeHostExtension[] {
-  return discoverInstances(program, "ExposeHostPermission", [
-    "v2Perm", "hostPerm",
-  ]).filter(
-    (p) => p.v2Perm && p.hostPerm,
-  ) as ExposeHostExtension[];
+  const def = getTemplate("ExposeHostPermission");
+  const { results, skipped } = discoverInstances(program, def);
+  if (warnings) warnings.skipped.push(...skipped);
+  return results.filter(
+    (p): p is Record<string, string> & ExposeHostExtension =>
+      !!(p.v2Perm && p.hostPerm),
+  );
 }
+```
 
-/**
- * Each ExposeHostPermission adds one intersection to hbi/host.
- * host.{hostPerm} = view AND workspace.{v2Perm}
- */
+**`src/expand.ts`** -- add pure expansion:
+
+```typescript
 export function expandExposeHostPermissions(
   resources: ResourceDef[],
   extensions: ExposeHostExtension[],
 ): ResourceDef[] {
-  const result = resources.map((r) => ({
-    ...r,
-    relations: [...r.relations],
-  }));
+  const result = cloneResources(resources);
   const host = findResource(result, "inventory", "host");
   if (!host) return result;
 
@@ -669,17 +662,12 @@ export function expandExposeHostPermissions(
 }
 ```
 
-**`src/spicedb-emitter.ts`** -- wire into the pipeline:
+**`src/pipeline.ts`** -- wire into the pipeline:
 
 ```typescript
-import {
-  discoverExposeHostPermissions,
-  expandExposeHostPermissions,
-} from "./expand.js";
-
 // After contingent expansion:
-const exposeHostPerms = discoverExposeHostPermissions(program);
-fullSchema = expandExposeHostPermissions(fullSchema, exposeHostPerms);
+const exposeHostPerms = discoverExposeHostPermissions(program, discoveryWarnings);
+const exposeResult = expandExposeHostPermissions(contingentResult, exposeHostPerms);
 ```
 
 #### What service authors write
@@ -825,8 +813,8 @@ created by earlier ones:
 4. view_metadata accumulation -> ORs all read-verb perms (after all workspace perms exist)
 ```
 
-This ordering is explicit in `src/spicedb-emitter.ts`. No implicit
-dependency resolution is needed.
+This ordering is explicit in `src/pipeline.ts` (called by `spicedb-emitter.ts`).
+No implicit dependency resolution is needed.
 
 ---
 

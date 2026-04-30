@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   generateUnifiedJsonSchemas,
+  slotName,
   type ResourceDef,
 } from "../../src/lib.js";
 
@@ -12,7 +13,7 @@ describe("generateUnifiedJsonSchemas", () => {
         namespace: "inventory",
         relations: [
           { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
-          { name: "view", body: { kind: "subref", name: "t_workspace", subname: "inventory_host_view" } },
+          { name: "view", body: { kind: "subref", name: slotName("workspace"), subname: "inventory_host_view" } },
         ],
       },
     ];
@@ -66,7 +67,7 @@ describe("generateUnifiedJsonSchemas", () => {
         namespace: "inventory",
         relations: [
           { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "Any" } },
-          { name: "view", body: { kind: "ref", name: "t_workspace" } },
+          { name: "view", body: { kind: "ref", name: slotName("workspace") } },
         ],
       },
     ];

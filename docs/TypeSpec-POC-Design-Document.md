@@ -63,7 +63,7 @@ model HostData {
     ┌───────────────────┐       ┌───────────────────┐
     │  STEP 2a: DISCOVER│       │  STEP 2b: DISCOVER│
     │  RESOURCES        │       │  EXTENSIONS       │
-    │  (discover.ts)    │       │  (expand.ts)      │
+    │  (discover.ts)    │       │  (discover.ts)    │
     │                   │       │                   │
     │  Walk all models. │       │  Walk all models. │
     │  Find Assignable, │       │  Find V1Workspace │
@@ -101,7 +101,12 @@ model HostData {
     │    view_metadata = OR(all read-verb v2 perms)           │
     │                                                         │
     │  expandCascadeDeletePolicies (expand.ts):               │
-    │    Adds delete permission on child resources.            │
+    │    Wires "delete" through the full RBAC chain:          │
+    │      Role:        delete = any_any_any                  │
+    │      RoleBinding: delete = subject & t_granted->delete  │
+    │      Workspace:   delete = t_binding->delete            │
+    │                          + t_parent->delete             │
+    │      Child:       delete = t_{parent}->delete           │
     │                                                         │
     │  Bool dedup: inventory_any_any added once even if       │
     │  both inv_host_view and inv_host_update request it.     │
@@ -174,18 +179,21 @@ definition rbac/principal {}
 definition rbac/role {
     permission any_any_any = t_any_any_any
     permission inventory_host_view = any_any_any + inventory_any_any + ...
+    permission delete = any_any_any
     relation t_any_any_any: rbac/principal:*
     ...
 }
 
 definition rbac/role_binding {
     permission inventory_host_view = (subject & t_granted->inventory_host_view)
+    permission delete = (subject & t_granted->delete)
     ...
 }
 
 definition rbac/workspace {
     permission view_metadata = inventory_host_view + remediations_remediation_view
     permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view
+    permission delete = t_binding->delete + t_parent->delete
     ...
 }
 
@@ -266,16 +274,18 @@ No TypeScript changes needed.
 
 | File | Lines | What it does |
 |------|-------|-------------|
-| `src/types.ts` | 50 | Core interfaces: `ResourceDef`, `RelationBody`, `V1Extension`, `UnifiedJsonSchema`, `IntermediateRepresentation` |
-| `src/utils.ts` | 36 | Utilities: `getNamespaceFQN`, `camelToSnake`, `bodyToZed` |
-| `src/parser.ts` | 156 | Recursive-descent parser for SpiceDB permission expression strings |
-| `src/discover.ts` | 182 | Resource discovery from compiled TypeSpec Program |
-| `src/expand.ts` | 287 | Extension discovery (V1, annotations, cascade delete) + expansion |
-| `src/generate.ts` | 144 | Output generators: SpiceDB, JSON Schema, metadata, IR |
-| `src/safety.ts` | 253 | Defense-in-depth: complexity budget, timeout, output size, expression validation |
-| `src/lib.ts` | 34 | Barrel module re-exporting all public API |
-| `src/spicedb-emitter.ts` | 181 | CLI entry point: compile → discover → validate → expand → generate → emit |
-| **Total** | **1323** | |
+| `src/types.ts` | 71 | Core interfaces: `ResourceDef`, `RelationBody`, `V1Extension`, `UnifiedJsonSchema`, `IntermediateRepresentation`, `AnnotationEntry`, `RBACScaffold` |
+| `src/utils.ts` | 66 | Shared helpers: `getNamespaceFQN`, `camelToSnake`, `bodyToZed`, `slotName`, `flattenAnnotations`, `findResource`, `cloneResources`, `isAssignable` |
+| `src/parser.ts` | 157 | Recursive-descent parser for SpiceDB permission expression strings |
+| `src/registry.ts` | 17 | Extension template registry: single source of truth for template names, params, and namespaces |
+| `src/discover.ts` | 340 | AST walking: resource discovery + extension instance enumeration (V1 perms, annotations, cascade delete) |
+| `src/expand.ts` | 218 | Pure expansion math: V1 permission + cascade delete expansion (no TypeSpec imports) |
+| `src/pipeline.ts` | 107 | Pipeline orchestration: compile → discover → validate → expand → validate → generate |
+| `src/generate.ts` | 160 | Output generators: SpiceDB, JSON Schema, metadata, IR |
+| `src/safety.ts` | 277 | Defense-in-depth: complexity budget, timeout, output size, expression validation |
+| `src/lib.ts` | 59 | Barrel module re-exporting all public API |
+| `src/spicedb-emitter.ts` | 156 | CLI entry point: parses flags, calls `compilePipeline`, emits the requested output format |
+| **Total** | **~1600** | |
 
 ### Commands
 
@@ -285,7 +295,7 @@ npx tsx src/spicedb-emitter.ts schema/main.tsp --metadata              # Service
 npx tsx src/spicedb-emitter.ts schema/main.tsp --unified-jsonschema    # JSON Schema
 npx tsx src/spicedb-emitter.ts schema/main.tsp --ir                    # IR for Go consumer
 npx tsx src/spicedb-emitter.ts schema/main.tsp --preview <v2perm>      # Preview extension mutations
-npx vitest run                                                         # 153 tests
+npx vitest run                                                         # 203 tests
 ```
 
 ---
@@ -367,7 +377,7 @@ Even with structural prevention, the emitter includes runtime guards in `src/saf
 | **Complexity budget** | Pre-expansion | Too many extensions (default limit: 500) |
 | **Expansion timeout** | During expansion | Bugs in platform expansion code (default: 10s) |
 | **Output size limit** | Post-generation | Combinatorial explosion (warn >100KB, error >1MB) |
-| **Permission expression validation** | Post-expansion | Typos and stale references in `Permission<"expr">` strings |
+| **Permission expression validation** | Post-expansion | Typos, stale references, and cross-type subref mismatches in `Permission<"expr">` strings |
 
 These guards fail fast with actionable diagnostics. The complexity budget
 prevents expansion from starting; the timeout catches bugs in expansion code;
@@ -378,9 +388,39 @@ the output size limit catches unexpected growth.
 New extension templates maintain the structural guarantee:
 
 1. A new TypeSpec template in `lib/kessel-extensions.tsp` (declarative, no computation)
-2. A new expansion function in `src/expand.ts` (platform-owned, bounded, tested)
+2. A new entry in `src/registry.ts` (template name, param names, namespace)
+3. Discovery logic in `src/discover.ts` (AST walking for instances)
+4. A new expansion function in `src/expand.ts` (platform-owned, bounded, tested)
 
 Service authors still only instantiate templates. The trust boundary does not move.
 This is an explicit tradeoff: explicit expansion functions over a generic
 rule engine. A generic engine would move computation into user-authored rules,
 losing the structural safety guarantee.
+
+## IR Contract
+
+The Intermediate Representation (IR) is the contract between the TypeSpec emitter
+(TypeScript) and downstream consumers (Go loader, CI tooling, etc.).
+
+**Current version:** `1.2.0` (defined as `IR_VERSION` in `src/types.ts`)
+
+### Field Semantics
+
+| Field | Type | Description |
+|---|---|---|
+| `version` | `string` | Semver IR format version. Bump minor for additive changes, major for breaking. |
+| `generatedAt` | `string` | ISO 8601 timestamp of generation (non-deterministic, excluded from diff). |
+| `source` | `string` | Schema-root-relative path to the compiled `.tsp` entry point (e.g. `schema/main.tsp`). |
+| `resources` | `ResourceDef[]` | Expanded resource definitions including RBAC scaffold mutations. |
+| `extensions` | `V1Extension[]` | Discovered V1WorkspacePermission instances (pre-expansion). |
+| `spicedb` | `string` | Generated SpiceDB/Zed schema text. |
+| `metadata` | `Record<string, ServiceMetadata>` | Per-application service metadata (permissions, resources, cascade policies, annotations). |
+| `jsonSchemas` | `Record<string, UnifiedJsonSchema>` | Generated JSON schemas for ExactlyOne assignable relations. |
+| `annotations` | `Record<string, Record<string, string>>` | Optional. Flattened resource annotations keyed by `application/resource`. |
+
+### Contract Rules
+
+1. The Go struct in `go-loader-example/schema/types.go` must stay in sync with
+   the TypeScript `IntermediateRepresentation` interface in `src/types.ts`.
+2. New fields must use `omitempty` in Go and `?` in TypeScript for backward compatibility.
+3. The `version` field must be bumped when the IR shape changes.

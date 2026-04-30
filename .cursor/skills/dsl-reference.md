@@ -78,6 +78,8 @@ Parameters:
 ### CascadeDeletePolicy
 
 Adds a `delete` permission on a child resource that resolves through the parent relation.
+Also wires `delete` through the full RBAC chain (role → role_binding → workspace → child)
+so every arrow reference resolves to an existing permission.
 
 ```typespec
 alias x = Kessel.CascadeDeletePolicy<ChildApp, ChildResource, ParentRelation>
@@ -87,6 +89,12 @@ Parameters:
 - `ChildApp` — application owning the child resource
 - `ChildResource` — child resource name
 - `ParentRelation` — relation on the child pointing to the parent
+
+Generated RBAC chain:
+- `rbac/role`: `permission delete = any_any_any`
+- `rbac/role_binding`: `permission delete = (subject & t_granted->delete)`
+- `rbac/workspace`: `permission delete = t_binding->delete + t_parent->delete`
+- Child resource: `permission delete = t_{parentRelation}->delete`
 
 ### ResourceAnnotation
 
@@ -114,6 +122,12 @@ npx tsx src/spicedb-emitter.ts schema/main.tsp --unified-jsonschema
 # Preview a specific extension's mutations
 npx tsx src/spicedb-emitter.ts schema/main.tsp --preview inventory_host_view
 
+# Generate annotations JSON
+npx tsx src/spicedb-emitter.ts schema/main.tsp --annotations
+
+# Skip permission expression validation failures
+npx tsx src/spicedb-emitter.ts schema/main.tsp --no-strict
+
 # Run tests
 npx vitest run
 ```
@@ -123,18 +137,22 @@ npx vitest run
 ```
 schema/*.tsp          →  TypeSpec Compiler  →  Type Graph
                                                     ↓
-                                            discoverResources()
+                              discover.ts:  discoverResources()
                                             discoverV1Permissions()
                                             discoverAnnotations()
                                             discoverCascadeDeletePolicies()
                                                     ↓
-                                            expandV1Permissions()
+                              expand.ts:    expandV1Permissions()
                                             expandCascadeDeletePolicies()
                                                     ↓
-                                            generateSpiceDB()
+                              generate.ts:  generateSpiceDB()
                                             generateMetadata()
                                             generateUnifiedJsonSchemas()
                                             generateIR()
+
+  Orchestration:  pipeline.ts (compilePipeline)
+  Registry:       registry.ts (EXTENSION_TEMPLATES — template names, params, namespaces)
+  Shared helpers: utils.ts (bodyToZed, slotName, findResource, cloneResources, isAssignable)
 ```
 
-Trust boundary: service authors write `schema/*.tsp` (declarative); expansion logic lives in platform-owned `src/expand.ts`.
+Trust boundary: service authors write `schema/*.tsp` (declarative); discovery lives in `src/discover.ts`; expansion logic lives in platform-owned `src/expand.ts`.

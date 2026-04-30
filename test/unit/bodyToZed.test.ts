@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bodyToZed } from "../../src/lib.js";
+import { bodyToZed, slotName } from "../../src/lib.js";
 
 describe("bodyToZed", () => {
   it("renders assignable as target name", () => {
@@ -13,24 +13,24 @@ describe("bodyToZed", () => {
   });
 
   it("renders ref as plain name", () => {
-    expect(bodyToZed({ kind: "ref", name: "t_workspace" }))
-      .toBe("t_workspace");
+    expect(bodyToZed({ kind: "ref", name: slotName("workspace") }))
+      .toBe(`${slotName("workspace")}`);
   });
 
   it("renders subref with arrow syntax", () => {
-    expect(bodyToZed({ kind: "subref", name: "t_binding", subname: "inventory_host_view" }))
-      .toBe("t_binding->inventory_host_view");
+    expect(bodyToZed({ kind: "subref", name: slotName("binding"), subname: "inventory_host_view" }))
+      .toBe(`${slotName("binding")}->inventory_host_view`);
   });
 
   it("renders or as + joined members", () => {
     const body = {
       kind: "or" as const,
       members: [
-        { kind: "subref" as const, name: "t_binding", subname: "x" },
-        { kind: "subref" as const, name: "t_parent", subname: "x" },
+        { kind: "subref" as const, name: slotName("binding"), subname: "x" },
+        { kind: "subref" as const, name: slotName("parent"), subname: "x" },
       ],
     };
-    expect(bodyToZed(body)).toBe("t_binding->x + t_parent->x");
+    expect(bodyToZed(body)).toBe(`${slotName("binding")}->x + ${slotName("parent")}->x`);
   });
 
   it("renders and wrapped in parentheses", () => {
@@ -38,10 +38,10 @@ describe("bodyToZed", () => {
       kind: "and" as const,
       members: [
         { kind: "ref" as const, name: "subject" },
-        { kind: "subref" as const, name: "t_granted", subname: "perm" },
+        { kind: "subref" as const, name: slotName("granted"), subname: "perm" },
       ],
     };
-    expect(bodyToZed(body)).toBe("(subject & t_granted->perm)");
+    expect(bodyToZed(body)).toBe(`(subject & ${slotName("granted")}->perm)`);
   });
 
   it("renders complex nested or with refs and subrefs", () => {

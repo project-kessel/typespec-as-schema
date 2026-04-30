@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateSpiceDB, type ResourceDef } from "../../src/lib.js";
+import { generateSpiceDB, slotName, type ResourceDef } from "../../src/lib.js";
 
 describe("generateSpiceDB", () => {
   it("generates an empty definition for a resource with no relations", () => {
@@ -22,8 +22,8 @@ describe("generateSpiceDB", () => {
       },
     ];
     const output = generateSpiceDB(resources);
-    expect(output).toContain("relation t_workspace: rbac/workspace");
-    expect(output).toContain("permission workspace = t_workspace");
+    expect(output).toContain(`relation ${slotName("workspace")}: rbac/workspace`);
+    expect(output).toContain(`permission workspace = ${slotName("workspace")}`);
   });
 
   it("generates t_ prefixed relations for bool relations", () => {
@@ -37,8 +37,8 @@ describe("generateSpiceDB", () => {
       },
     ];
     const output = generateSpiceDB(resources);
-    expect(output).toContain("relation t_any_any_any: rbac/principal:*");
-    expect(output).toContain("permission any_any_any = t_any_any_any");
+    expect(output).toContain(`relation ${slotName("any_any_any")}: rbac/principal:*`);
+    expect(output).toContain(`permission any_any_any = ${slotName("any_any_any")}`);
   });
 
   it("generates computed permissions", () => {
@@ -48,12 +48,12 @@ describe("generateSpiceDB", () => {
         namespace: "inventory",
         relations: [
           { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
-          { name: "view", body: { kind: "subref", name: "t_workspace", subname: "inventory_host_view" } },
+          { name: "view", body: { kind: "subref", name: slotName("workspace"), subname: "inventory_host_view" } },
         ],
       },
     ];
     const output = generateSpiceDB(resources);
-    expect(output).toContain("permission view = t_workspace->inventory_host_view");
+    expect(output).toContain(`permission view = ${slotName("workspace")}->inventory_host_view`);
   });
 
   it("generates intersection permissions with parentheses", () => {
@@ -70,7 +70,7 @@ describe("generateSpiceDB", () => {
               kind: "and",
               members: [
                 { kind: "ref", name: "subject" },
-                { kind: "subref", name: "t_granted", subname: "inventory_host_view" },
+                { kind: "subref", name: slotName("granted"), subname: "inventory_host_view" },
               ],
             },
           },
@@ -78,7 +78,7 @@ describe("generateSpiceDB", () => {
       },
     ];
     const output = generateSpiceDB(resources);
-    expect(output).toContain("permission inventory_host_view = (subject & t_granted->inventory_host_view)");
+    expect(output).toContain(`permission inventory_host_view = (subject & ${slotName("granted")}->inventory_host_view)`);
   });
 
   it("generates union permissions", () => {
@@ -94,8 +94,8 @@ describe("generateSpiceDB", () => {
             body: {
               kind: "or",
               members: [
-                { kind: "subref", name: "t_binding", subname: "inventory_host_view" },
-                { kind: "subref", name: "t_parent", subname: "inventory_host_view" },
+                { kind: "subref", name: slotName("binding"), subname: "inventory_host_view" },
+                { kind: "subref", name: slotName("parent"), subname: "inventory_host_view" },
               ],
             },
           },
@@ -103,7 +103,7 @@ describe("generateSpiceDB", () => {
       },
     ];
     const output = generateSpiceDB(resources);
-    expect(output).toContain("permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view");
+    expect(output).toContain(`permission inventory_host_view = ${slotName("binding")}->inventory_host_view + ${slotName("parent")}->inventory_host_view`);
   });
 
   it("outputs permissions before relations within a definition", () => {
@@ -113,13 +113,13 @@ describe("generateSpiceDB", () => {
         namespace: "inventory",
         relations: [
           { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
-          { name: "view", body: { kind: "subref", name: "t_workspace", subname: "inventory_host_view" } },
+          { name: "view", body: { kind: "subref", name: slotName("workspace"), subname: "inventory_host_view" } },
         ],
       },
     ];
     const output = generateSpiceDB(resources);
     const permIdx = output.indexOf("permission workspace");
-    const relIdx = output.indexOf("relation t_workspace");
+    const relIdx = output.indexOf(`relation ${slotName("workspace")}`);
     expect(permIdx).toBeLessThan(relIdx);
   });
 

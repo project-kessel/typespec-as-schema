@@ -1,15 +1,15 @@
-import type {
-  ResourceDef,
-  V1Extension,
-  UnifiedJsonSchema,
-  ServiceMetadata,
-  IntermediateRepresentation,
+import * as path from "path";
+import {
+  IR_VERSION,
+  type ResourceDef,
+  type V1Extension,
+  type UnifiedJsonSchema,
+  type ServiceMetadata,
+  type IntermediateRepresentation,
+  type CascadeDeleteEntry,
+  type AnnotationEntry,
 } from "./types.js";
-import { bodyToZed } from "./utils.js";
-
-function isAssignable(body: ResourceDef["relations"][number]["body"]): boolean {
-  return body.kind === "assignable" || body.kind === "bool";
-}
+import { bodyToZed, slotName, flattenAnnotations, isAssignable } from "./utils.js";
 
 export function generateSpiceDB(resources: ResourceDef[]): string {
   const lines: string[] = [];
@@ -24,7 +24,7 @@ export function generateSpiceDB(resources: ResourceDef[]): string {
     const relLines: string[] = [];
 
     for (const rel of assignables) {
-      const tName = `t_${rel.name}`;
+      const tName = slotName(rel.name);
       relLines.push(`    relation ${tName}: ${bodyToZed(rel.body)}`);
       permLines.push(`    permission ${rel.name} = ${tName}`);
     }
@@ -67,6 +67,7 @@ export function generateUnifiedJsonSchemas(
         rel.body.kind === "assignable" &&
         rel.body.cardinality === "ExactlyOne"
       ) {
+        // Kessel convention: all ExactlyOne assignable relations use UUID identifiers.
         const idField = `${rel.name}_id`;
         schema.properties[idField] = {
           type: "string",
@@ -88,24 +89,46 @@ export function generateUnifiedJsonSchemas(
 
 export function generateMetadata(
   resources: ResourceDef[],
-  extensions: V1Extension[]
+  extensions: V1Extension[],
+  annotations?: Map<string, AnnotationEntry[]>,
+  cascadePolicies?: CascadeDeleteEntry[],
 ): Record<string, ServiceMetadata> {
   const metadata: Record<string, ServiceMetadata> = {};
 
-  for (const ext of extensions) {
-    if (!metadata[ext.application]) {
-      metadata[ext.application] = { permissions: [], resources: [] };
+  function ensure(app: string): ServiceMetadata {
+    if (!metadata[app]) {
+      metadata[app] = { permissions: [], resources: [] };
     }
-    metadata[ext.application].permissions.push(ext.v2Perm);
+    return metadata[app];
+  }
+
+  for (const ext of extensions) {
+    ensure(ext.application).permissions.push(ext.v2Perm);
   }
 
   for (const res of resources) {
     if (res.namespace === "rbac") continue;
     const ns = res.namespace.split("/").pop() || res.namespace;
-    if (!metadata[ns]) {
-      metadata[ns] = { permissions: [], resources: [] };
+    ensure(ns).resources.push(res.name);
+  }
+
+  if (cascadePolicies) {
+    for (const cp of cascadePolicies) {
+      const svc = ensure(cp.childApplication.toLowerCase());
+      if (!svc.cascadeDeletePolicies) svc.cascadeDeletePolicies = [];
+      svc.cascadeDeletePolicies.push(`${cp.childResource} via ${cp.parentRelation}`);
     }
-    metadata[ns].resources.push(res.name);
+  }
+
+  if (annotations) {
+    for (const [resourceKey, entries] of annotations) {
+      const app = resourceKey.split("/")[0];
+      const svc = ensure(app);
+      if (!svc.annotations) svc.annotations = {};
+      for (const e of entries) {
+        svc.annotations[`${resourceKey}:${e.key}`] = e.value;
+      }
+    }
   }
 
   return metadata;
@@ -115,29 +138,22 @@ export function generateIR(
   mainFile: string,
   fullSchema: ResourceDef[],
   extensions: V1Extension[],
-  annotations?: Map<string, { key: string; value: string }[]>,
+  annotations?: Map<string, AnnotationEntry[]>,
+  cascadePolicies?: CascadeDeleteEntry[],
 ): IntermediateRepresentation {
   const ir: IntermediateRepresentation = {
-    version: "1.2.0",
+    version: IR_VERSION,
     generatedAt: new Date().toISOString(),
-    source: mainFile,
+    source: `schema/${path.basename(mainFile)}`,
     resources: fullSchema,
     extensions,
     spicedb: generateSpiceDB(fullSchema),
-    metadata: generateMetadata(fullSchema, extensions),
+    metadata: generateMetadata(fullSchema, extensions, annotations, cascadePolicies),
     jsonSchemas: generateUnifiedJsonSchemas(fullSchema),
   };
 
   if (annotations && annotations.size > 0) {
-    const out: Record<string, Record<string, string>> = {};
-    for (const [resourceKey, entries] of annotations) {
-      const obj: Record<string, string> = {};
-      for (const e of entries) {
-        obj[e.key] = e.value;
-      }
-      out[resourceKey] = obj;
-    }
-    ir.annotations = out;
+    ir.annotations = flattenAnnotations(annotations);
   }
 
   return ir;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateIR, type ResourceDef, type V1Extension } from "../../src/lib.js";
+import { generateIR, IR_VERSION, slotName, type ResourceDef, type V1Extension } from "../../src/lib.js";
 
 const sampleResources: ResourceDef[] = [
   {
@@ -7,7 +7,7 @@ const sampleResources: ResourceDef[] = [
     namespace: "inventory",
     relations: [
       { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
-      { name: "view", body: { kind: "subref", name: "t_workspace", subname: "inventory_host_view" } },
+      { name: "view", body: { kind: "subref", name: slotName("workspace"), subname: "inventory_host_view" } },
     ],
   },
 ];
@@ -19,7 +19,7 @@ const sampleExtensions: V1Extension[] = [
 describe("generateIR", () => {
   it("produces all required top-level fields", () => {
     const ir = generateIR("schema/main.tsp", sampleResources, sampleExtensions);
-    expect(ir.version).toBe("1.2.0");
+    expect(ir.version).toBe(IR_VERSION);
     expect(ir.generatedAt).toBeDefined();
     expect(ir.source).toBe("schema/main.tsp");
     expect(ir.resources).toBe(sampleResources);
@@ -61,8 +61,8 @@ describe("generateIR", () => {
 
   it("embeds SpiceDB output from the same resources", () => {
     const ir = generateIR("test.tsp", sampleResources, sampleExtensions);
-    expect(ir.spicedb).toContain("permission view = t_workspace->inventory_host_view");
-    expect(ir.spicedb).toContain("relation t_workspace: rbac/workspace");
+    expect(ir.spicedb).toContain(`permission view = ${slotName("workspace")}->inventory_host_view`);
+    expect(ir.spicedb).toContain(`relation ${slotName("workspace")}: rbac/workspace`);
   });
 
   it("embeds metadata grouped by application", () => {

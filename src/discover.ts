@@ -1,3 +1,9 @@
+// Discovery — all AST walking and template instance enumeration.
+//
+// Resource discovery (service models) and extension instance discovery
+// (V1WorkspacePermission, ResourceAnnotation, CascadeDeletePolicy) live here.
+// Expansion logic (RBAC mutations) lives in expand.ts.
+
 import {
   navigateProgram,
   isTemplateInstance,
@@ -6,9 +12,10 @@ import {
   type Namespace,
   type Type,
 } from "@typespec/compiler";
-import type { RelationDef, ResourceDef } from "./types.js";
+import type { RelationDef, ResourceDef, V1Extension, CascadeDeleteEntry, AnnotationEntry } from "./types.js";
 import { getNamespaceFQN, camelToSnake } from "./utils.js";
 import { parsePermissionExpr } from "./parser.js";
+import { EXTENSION_TEMPLATES, type ExtensionTemplateDef } from "./registry.js";
 
 // ─── Type helpers ────────────────────────────────────────────────────
 
@@ -31,7 +38,9 @@ function getEnumMemberName(t: Type | undefined): string | undefined {
 }
 
 function hasTypeProperty(t: Type): t is Type & { type: Type } {
-  return "type" in t && typeof (t as unknown as Record<string, unknown>)["type"] === "object" && (t as unknown as Record<string, unknown>)["type"] !== null;
+  if (!("type" in t)) return false;
+  const val = (t as unknown as Record<string, unknown>)["type"];
+  return typeof val === "object" && val !== null;
 }
 
 function resolveTargetName(t: Type | undefined): string {
@@ -43,14 +52,45 @@ function resolveTargetName(t: Type | undefined): string {
   return "unknown";
 }
 
+// ─── String value extraction (for template instance params) ──────────
+
+function hasStringValue(t: Type): t is Type & { value: string } {
+  return "value" in t && typeof (t as unknown as Record<string, unknown>).value === "string";
+}
+
+function getStringValue(t: Type): string | undefined {
+  if (hasStringValue(t)) return t.value;
+  if (t.kind === "Scalar" && t.name) return t.name;
+  return undefined;
+}
+
+function extractParams(model: Model, names: string[]): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const name of names) {
+    const prop = model.properties.get(name);
+    if (prop) {
+      const value = getStringValue(prop.type);
+      if (value) params[name] = value;
+    }
+  }
+  return params;
+}
+
 // ─── Extension template lookup ───────────────────────────────────────
 
-/** Find an extension template by name in the Kessel namespace. */
-export function findExtensionTemplate(program: Program, templateName: string): Model | null {
+/** Find an extension template by name, optionally scoped to a namespace suffix. */
+export function findExtensionTemplate(
+  program: Program,
+  templateName: string,
+  namespace?: string,
+): Model | null {
   const globalNs = program.getGlobalNamespaceType();
   function search(ns: Namespace): Model | null {
     for (const [, model] of ns.models) {
-      if (model.name === templateName) return model;
+      if (model.name === templateName &&
+          (!namespace || getNamespaceFQN(ns).endsWith(namespace))) {
+        return model;
+      }
     }
     for (const [, childNs] of ns.namespaces) {
       const found = search(childNs);
@@ -74,9 +114,126 @@ export function isInstanceOf(model: Model, template: Model): boolean {
   return false;
 }
 
-// ─── Resource discovery ─────────────────────────────────────────────
+// ─── Extension instance discovery ────────────────────────────────────
 
-const EXTENSION_TEMPLATE_NAMES = ["V1WorkspacePermission", "ResourceAnnotation", "CascadeDeletePolicy"];
+interface DiscoverInstancesResult {
+  results: Record<string, string>[];
+  skipped: string[];
+}
+
+function discoverInstances(
+  program: Program,
+  def: ExtensionTemplateDef,
+): DiscoverInstancesResult {
+  const { templateName, paramNames, namespace } = def;
+  const template = findExtensionTemplate(program, templateName, namespace);
+  if (!template) return { results: [], skipped: [] };
+
+  const results: Record<string, string>[] = [];
+  const seen = new Set<string>();
+  const skipped: string[] = [];
+
+  function addUnique(model: Model): void {
+    if (!isInstanceOf(model, template!)) return;
+    const params = extractParams(model, paramNames);
+    if (Object.keys(params).length === 0) return;
+    const key = JSON.stringify(params);
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push(params);
+  }
+
+  navigateProgram(program, {
+    model(model: Model) {
+      if (model.templateNode && !isTemplateInstance(model)) return;
+      if (getNamespaceFQN(model.namespace).endsWith("Kessel")) return;
+      addUnique(model);
+    },
+  });
+
+  for (const [, sourceFile] of program.sourceFiles) {
+    for (const statement of sourceFile.statements) {
+      if (!("value" in statement && "id" in statement)) continue;
+      try {
+        const aliasType = program.checker.getTypeForNode(statement);
+        if (!aliasType || aliasType.kind !== "Model") continue;
+        addUnique(aliasType as Model);
+      } catch (e: unknown) {
+        // Best-effort: swallow TypeSpec compiler resolution errors (e.g. "cannot resolve",
+        // "not found") so discovery continues for other statements. The regex is fragile —
+        // if @typespec/compiler changes error wording, this will re-throw instead of skipping.
+        // That's the safe direction: unexpected errors surface rather than hide.
+        if (e instanceof Error && /cannot|not found|resolve/i.test(e.message)) {
+          skipped.push(`Skipped statement in ${templateName} discovery: ${e.message}`);
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
+
+  return { results, skipped };
+}
+
+function getTemplate(name: string): ExtensionTemplateDef {
+  const def = EXTENSION_TEMPLATES.find(t => t.templateName === name);
+  if (!def) throw new Error(`Unknown extension template: ${name}`);
+  return def;
+}
+
+export const VALID_VERBS = new Set(["read", "write", "create", "delete"]);
+
+export interface DiscoveryWarnings {
+  skipped: string[];
+}
+
+export function discoverV1Permissions(program: Program, warnings?: DiscoveryWarnings): V1Extension[] {
+  const def = getTemplate("V1WorkspacePermission");
+  const { results, skipped } = discoverInstances(program, def);
+  if (warnings) warnings.skipped.push(...skipped);
+  return results.filter(
+    (p): p is Record<string, string> & V1Extension =>
+      !!(p.application && p.resource && p.verb && p.v2Perm) &&
+      VALID_VERBS.has(p.verb),
+  );
+}
+
+export function discoverAnnotations(
+  program: Program,
+  warnings?: DiscoveryWarnings,
+): Map<string, AnnotationEntry[]> {
+  const def = getTemplate("ResourceAnnotation");
+  const { results: raw, skipped } = discoverInstances(program, def);
+  if (warnings) warnings.skipped.push(...skipped);
+
+  const annotations = new Map<string, AnnotationEntry[]>();
+  for (const params of raw) {
+    if (!params.application || !params.resource || !params.key) continue;
+    const resourceKey = `${params.application}/${params.resource}`;
+    let list = annotations.get(resourceKey);
+    if (!list) {
+      list = [];
+      annotations.set(resourceKey, list);
+    }
+    list.push({ key: params.key, value: params.value ?? "" });
+  }
+  return annotations;
+}
+
+export function discoverCascadeDeletePolicies(
+  program: Program,
+  warnings?: DiscoveryWarnings,
+): CascadeDeleteEntry[] {
+  const def = getTemplate("CascadeDeletePolicy");
+  const { results, skipped } = discoverInstances(program, def);
+  if (warnings) warnings.skipped.push(...skipped);
+  return results.filter(
+    (p): p is Record<string, string> & CascadeDeleteEntry =>
+      !!(p.childApplication && p.childResource && p.parentRelation),
+  );
+}
+
+// ─── Resource discovery ─────────────────────────────────────────────
 
 function modelToResource(
   model: Model,
@@ -138,18 +295,14 @@ function modelToResource(
   };
 }
 
-/**
- * Discovers service resource models (not extension template instances).
- * Extension instances are discovered separately in expand.ts.
- */
 export function discoverResources(program: Program): {
   resources: ResourceDef[];
 } {
   const resources: ResourceDef[] = [];
   const seenResources = new Set<string>();
 
-  const extensionTemplates = EXTENSION_TEMPLATE_NAMES
-    .map((name) => findExtensionTemplate(program, name))
+  const extensionTemplates = EXTENSION_TEMPLATES
+    .map((def) => findExtensionTemplate(program, def.templateName, def.namespace))
     .filter((m): m is Model => m !== null);
 
   navigateProgram(program, {
@@ -176,6 +329,11 @@ export function discoverResources(program: Program): {
         resources.push(resource);
       }
     },
+  });
+
+  resources.sort((a, b) => {
+    const ns = a.namespace.localeCompare(b.namespace);
+    return ns !== 0 ? ns : a.name.localeCompare(b.name);
   });
 
   return { resources };

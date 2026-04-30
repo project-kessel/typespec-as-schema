@@ -8,6 +8,7 @@
 //   IDENT     = [a-zA-Z_][a-zA-Z0-9_]*
 
 import type { RelationBody } from "./types.js";
+import { slotName } from "./utils.js";
 
 type Token =
   | { type: "ident"; value: string }
@@ -118,14 +119,14 @@ class Parser {
       this.advance();
       const subTok = this.expect("ident");
       const subname = (subTok as { type: "ident"; value: string }).value;
-      return { kind: "subref", name: `t_${name}`, subname };
+      return { kind: "subref", name: slotName(name), subname };
     }
 
     if (this.peek().type === "dot") {
       this.advance();
       const subTok = this.expect("ident");
       const subname = (subTok as { type: "ident"; value: string }).value;
-      return { kind: "subref", name: `t_${name}`, subname };
+      return { kind: "subref", name: slotName(name), subname };
     }
 
     return { kind: "ref", name };

@@ -4,10 +4,10 @@ Prototype exploring [TypeSpec](https://typespec.io/) as a unified schema represe
 
 ## How It Works
 
-Service teams write `.tsp` files declaring resources and permissions. A TypeScript emitter compiles them into SpiceDB schemas, metadata, and JSON Schema -- no manual wiring needed.
+Service teams write `.tsp` files declaring resources and permissions. A standalone TypeScript CLI compiles them into SpiceDB schemas, metadata, and JSON Schema -- no manual wiring needed.
 
 ```
- .tsp files                     src/ (9 modules, 1323 lines)
+ .tsp files                     src/ (11 modules, ~1600 lines)
 
 ┌──────────────┐         ┌──────────────────────┐
 │ lib/         │         │  1. COMPILE           │
@@ -18,19 +18,18 @@ Service teams write `.tsp` files declaring resources and permissions. A TypeScri
 ├──────────────┤    │               │
 │ schema/      │    │    ┌──────────┴───────────┐
 │  main.tsp    │────┤    │  2. DISCOVER          │
-│  rbac.tsp    │    │    │  Walk the Program:    │
-│  hbi.tsp     │────┤    │  • resources          │
-│  remediations│    │    │    (discover.ts)      │
+│  rbac.tsp    │    │    │  (discover.ts)        │
+│  hbi.tsp     │────┤    │  Walk the Program:    │
+│  remediations│    │    │  • resources          │
 │  .tsp        │────┘    │  • V1 perms           │
 └──────────────┘         │  • annotations        │
                          │  • cascade policies   │
-                         │    (expand.ts)        │
                          └──────────┬───────────┘
                                     │
                          ┌──────────┴───────────┐
                          │  3. EXPAND            │         Outputs
                          │  (expand.ts)          │
-                         │  For each V1 perm:    │  ┌────────────────────┐
+                         │  Pure expansion math: │  ┌────────────────────┐
                          │  • Role: 4 bool +     │  │ SpiceDB .zed       │
                          │    1 union perm        │  │ (default)          │
                          │  • RoleBinding:        │  ├────────────────────┤
@@ -52,6 +51,9 @@ Service teams write `.tsp` files declaring resources and permissions. A TypeScri
                                     └─────────────▶│  5. GENERATE + EMIT │
                                                    │  (generate.ts)      │
                                                    └─────────────────────┘
+
+  Pipeline orchestration: pipeline.ts (compile → discover → validate → expand → generate)
+  Extension template registry: registry.ts (single source of truth for template names + params)
 ```
 
 ## Quick Start
@@ -62,7 +64,7 @@ npx tsx src/spicedb-emitter.ts schema/main.tsp            # SpiceDB output
 npx tsx src/spicedb-emitter.ts schema/main.tsp --metadata  # per-service metadata
 npx tsx src/spicedb-emitter.ts schema/main.tsp --ir        # full IR for Go consumer
 npx tsx src/spicedb-emitter.ts schema/main.tsp --preview inventory_host_view  # preview extension
-npx vitest run                                             # 153 tests
+npx vitest run                                             # 203 tests
 make demo                                                  # console tour
 ```
 
@@ -101,13 +103,15 @@ flowchart TB
     schema["schema/\nmain.tsp, rbac.tsp\nhbi.tsp, remediations.tsp"]
   end
 
-  subgraph pipeline ["Pipeline (src/, 9 modules)"]
+  subgraph pipeline ["Pipeline (src/, 11 modules)"]
     compile["1. Compile\n@typespec/compiler\n.tsp → typed Program"]
-    discover["2. Discover\ndiscover.ts: resources\nexpand.ts: V1 perms,\nannotations, cascade policies"]
+    discover["2. Discover\ndiscover.ts: resources,\nV1 perms, annotations,\ncascade policies"]
     budget["validateComplexityBudget"]
-    expand["3. Expand\nexpandV1Permissions: 7 mutations/perm\nexpandCascadeDeletePolicies"]
+    expand["3. Expand\nexpand.ts: pure expansion math\n7 mutations/perm + cascade delete"]
     validate["4. Validate\nvalidatePermissionExpressions\nvalidateOutputSize"]
     generate["5. Generate + Emit\ngenerate.ts"]
+    pipemod["pipeline.ts orchestrates\nsteps 1–5"]
+    registry["registry.ts\ntemplate definitions"]
   end
 
   subgraph outputs ["Outputs (one per invocation)"]
@@ -120,14 +124,26 @@ flowchart TB
 
   lib --> compile
   schema --> compile
+  registry -.-> discover
   compile --> discover
   discover --> budget --> expand --> validate --> generate
+  pipemod -.-> compile
   generate --> spicedb
   generate --> meta
   generate --> jsonschema
   generate --> ir
   generate --> preview
 ```
+
+### Decorators vs CLI Pipeline
+
+This project does **not** use custom TypeSpec decorators or a registered TypeSpec emitter plugin (`$onEmit`). Instead:
+
+- **Built-in decorators only** — `@doc`, `@format`, `@pattern`, `@jsonSchema` from the standard library are used in `schema/hbi.tsp` for data validation. These drive the built-in `@typespec/json-schema` emitter that writes `tsp-output/`.
+- **Model templates as data carriers** — `V1WorkspacePermission`, `CascadeDeletePolicy`, and `ResourceAnnotation` in `lib/kessel-extensions.tsp` are plain TypeSpec `model` definitions with type parameters. They carry parameters but have zero compile-time behavior. The comment in `kessel-extensions.tsp` says: *"Templates carry parameters only; expansion logic lives in src/expand.ts."*
+- **Standalone CLI** — `spicedb-emitter.ts` calls `compile()` from `@typespec/compiler` to get a `Program` object, then walks it with custom TypeScript functions (`discoverResources`, `discoverV1Permissions`, etc.). It is not registered as a TypeSpec emitter plugin — it is a standalone script that uses the compiler as a library.
+
+This approach was chosen so the full pipeline is visible in one file (`spicedb-emitter.ts`) and can be tested without TypeSpec plugin infrastructure.
 
 ### The 7 Mutations Per Extension
 
@@ -155,23 +171,25 @@ schema/                          Service schemas (teams own their files)
   hbi.tsp                          Host resource + V1 permission aliases + annotations
   remediations.tsp                 Permissions-only service
 
-src/                             Emitter (9 modules)
+src/                             CLI + pipeline (11 modules)
   types.ts                         Core interfaces: ResourceDef, RelationBody, V1Extension, IR
-  utils.ts                         Utilities: getNamespaceFQN, camelToSnake, bodyToZed
+  utils.ts                         Shared helpers: bodyToZed, slotName, findResource, cloneResources, isAssignable
   parser.ts                        Recursive-descent parser for permission expressions
-  discover.ts                      Resource discovery from compiled TypeSpec Program
-  expand.ts                        Extension discovery + V1 permission / cascade delete expansion
+  registry.ts                      Extension template registry (single source of truth for template names + params)
+  discover.ts                      AST walking: resource discovery + extension instance enumeration
+  expand.ts                        Pure expansion math: V1 permission / cascade delete expansion (no AST)
+  pipeline.ts                      Pipeline orchestration: compile → discover → validate → expand → generate
   generate.ts                      Output generators: SpiceDB, JSON Schema, metadata, IR
   safety.ts                        Defense-in-depth guards: complexity, timeout, output size, validation
   lib.ts                           Barrel module re-exporting all public API
   spicedb-emitter.ts               CLI entry point
 
-test/                            153 tests
+test/                            203 tests
   helpers/                         Shared test infrastructure
     pipeline.ts                      Compile + discover + expand pipeline fixture
     zed-parser.ts                    SpiceDB definition block parser
   unit/                            Pure unit tests (no TypeSpec compilation)
-  integration/                     Full pipeline + golden output comparison
+  integration/                     Full pipeline + golden output comparison + CLI smoke tests
 ```
 
 ## Output Formats

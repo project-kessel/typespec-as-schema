@@ -22,9 +22,8 @@ type ResourceDef struct {
 }
 
 type RelationDef struct {
-	Name     string       `json:"name"`
-	Body     RelationBody `json:"body"`
-	IsPublic bool         `json:"isPublic,omitempty"`
+	Name string       `json:"name"`
+	Body RelationBody `json:"body"`
 }
 
 // RelationBody is a polymorphic type discriminated by "kind".
@@ -46,8 +45,10 @@ type V1Extension struct {
 }
 
 type ServiceMetadata struct {
-	Permissions []string `json:"permissions"`
-	Resources   []string `json:"resources"`
+	Permissions           []string          `json:"permissions"`
+	Resources             []string          `json:"resources"`
+	CascadeDeletePolicies []string          `json:"cascadeDeletePolicies,omitempty"`
+	Annotations           map[string]string `json:"annotations,omitempty"`
 }
 
 type UnifiedJSONSchema struct {

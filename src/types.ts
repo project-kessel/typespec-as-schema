@@ -1,3 +1,5 @@
+export const IR_VERSION = "1.2.0";
+
 export interface RelationDef {
   name: string;
   body: RelationBody;
@@ -32,9 +34,28 @@ export interface UnifiedJsonSchema {
   required: string[];
 }
 
+export interface CascadeDeleteEntry {
+  childApplication: string;
+  childResource: string;
+  parentRelation: string;
+}
+
+export interface AnnotationEntry {
+  key: string;
+  value: string;
+}
+
+export interface RBACScaffold {
+  role: ResourceDef;
+  roleBinding: ResourceDef;
+  workspace: ResourceDef;
+}
+
 export interface ServiceMetadata {
   permissions: string[];
   resources: string[];
+  cascadeDeletePolicies?: string[];
+  annotations?: Record<string, string>;
 }
 
 export interface IntermediateRepresentation {

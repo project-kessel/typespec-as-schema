@@ -36,11 +36,7 @@ func printResources(ir *schema.IntermediateRepresentation) {
 	for _, res := range ir.Resources {
 		fmt.Printf("  %s/%s\n", res.Namespace, res.Name)
 		for _, rel := range res.Relations {
-			pub := ""
-			if rel.IsPublic {
-				pub = " [public]"
-			}
-			fmt.Printf("    %-30s  %s%s\n", rel.Name, describeBody(rel.Body), pub)
+			fmt.Printf("    %-30s  %s\n", rel.Name, describeBody(rel.Body))
 		}
 	}
 	fmt.Println()

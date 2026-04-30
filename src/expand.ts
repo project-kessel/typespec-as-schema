@@ -1,147 +1,32 @@
 // V1 Permission Expansion
 //
-// Explicit expansion of V1WorkspacePermission declarations into SpiceDB
-// relations on Role, RoleBinding, and Workspace.
+// Pure expansion math — takes discovered data and produces enriched SpiceDB
+// resource definitions. No AST walking, no TypeSpec imports.
 
-import type { Program, Model, Type } from "@typespec/compiler";
-import { navigateProgram, isTemplateInstance } from "@typespec/compiler";
-import type { ResourceDef, RelationDef, RelationBody, V1Extension } from "./types.js";
-import { getNamespaceFQN } from "./utils.js";
-import { isInstanceOf, findExtensionTemplate } from "./discover.js";
+import type { ResourceDef, RelationDef, RelationBody, V1Extension, CascadeDeleteEntry, RBACScaffold } from "./types.js";
+import { slotName, findResource, cloneResources } from "./utils.js";
 
-// ─── Discovery ──────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────
 
-function hasStringValue(t: Type): t is Type & { value: string } {
-  return "value" in t && typeof (t as unknown as Record<string, unknown>).value === "string";
+export interface ScaffoldResult {
+  scaffold: RBACScaffold | null;
+  warnings: string[];
 }
 
-function getStringValue(t: Type): string | undefined {
-  if (hasStringValue(t)) return t.value;
-  if (t.kind === "Scalar" && t.name) return t.name;
-  return undefined;
+export interface ExpansionResult {
+  resources: ResourceDef[];
+  warnings: string[];
 }
 
-function extractParams(model: Model, names: string[]): Record<string, string> {
-  const params: Record<string, string> = {};
-  for (const name of names) {
-    const prop = model.properties.get(name);
-    if (prop) {
-      const value = getStringValue(prop.type);
-      if (value) params[name] = value;
-    }
-  }
-  return params;
-}
+// ─── Expansion helpers ──────────────────────────────────────────────
 
-function discoverInstances(
-  program: Program,
-  templateName: string,
-  paramNames: string[],
-): Record<string, string>[] {
-  const template = findExtensionTemplate(program, templateName);
-  if (!template) return [];
-
-  const results: Record<string, string>[] = [];
-  const seen = new Set<string>();
-
-  function addUnique(model: Model): void {
-    if (!isInstanceOf(model, template!)) return;
-    const params = extractParams(model, paramNames);
-    if (Object.keys(params).length === 0) return;
-    const key = JSON.stringify(params);
-    if (seen.has(key)) return;
-    seen.add(key);
-    results.push(params);
-  }
-
-  navigateProgram(program, {
-    model(model: Model) {
-      if (model.templateNode && !isTemplateInstance(model)) return;
-      if (getNamespaceFQN(model.namespace).endsWith("Kessel")) return;
-      addUnique(model);
-    },
-  });
-
-  for (const [, sourceFile] of program.sourceFiles) {
-    for (const statement of sourceFile.statements) {
-      if (!("value" in statement && "id" in statement)) continue;
-      try {
-        const aliasType = program.checker.getTypeForNode(statement);
-        if (!aliasType || aliasType.kind !== "Model") continue;
-        addUnique(aliasType as Model);
-      } catch (_e) {
-        // Expected for non-extension alias statements that the checker cannot resolve.
-        // These are not errors -- alias resolution is best-effort during extension discovery.
-      }
-    }
-  }
-
-  return results;
-}
-
-export function discoverV1Permissions(program: Program): V1Extension[] {
-  return discoverInstances(program, "V1WorkspacePermission", [
-    "application", "resource", "verb", "v2Perm",
-  ]).filter(
-    (p): p is Record<string, string> & V1Extension =>
-      !!(p.application && p.resource && p.verb && p.v2Perm),
-  );
-}
-
-// ─── Annotation Discovery ──────────────────────────────────────────
-
-export interface AnnotationEntry {
-  key: string;
-  value: string;
-}
-
-/**
- * Discovers ResourceAnnotation template instances from the compiled program.
- * Returns annotations grouped by resource key (e.g., "inventory/host").
- */
-export function discoverAnnotations(
-  program: Program,
-): Map<string, AnnotationEntry[]> {
-  const raw = discoverInstances(program, "ResourceAnnotation", [
-    "application", "resource", "key", "value",
-  ]);
-
-  const annotations = new Map<string, AnnotationEntry[]>();
-  for (const params of raw) {
-    if (!params.application || !params.resource || !params.key) continue;
-    const resourceKey = `${params.application}/${params.resource}`;
-    let list = annotations.get(resourceKey);
-    if (!list) {
-      list = [];
-      annotations.set(resourceKey, list);
-    }
-    list.push({ key: params.key, value: params.value ?? "" });
-  }
-  return annotations;
-}
-
-// ─── CascadeDeletePolicy Discovery ──────────────────────────────────
-
-export interface CascadeDeleteEntry {
-  childApplication: string;
-  childResource: string;
-  parentRelation: string;
-}
-
-export function discoverCascadeDeletePolicies(program: Program): CascadeDeleteEntry[] {
-  return discoverInstances(program, "CascadeDeletePolicy", [
-    "childApplication", "childResource", "parentRelation",
-  ]).filter(
-    (p): p is Record<string, string> & CascadeDeleteEntry =>
-      !!(p.childApplication && p.childResource && p.parentRelation),
-  );
-}
-
-// ─── Expansion ──────────────────────────────────────────────────────
-
-function findResource(resources: ResourceDef[], ns: string, name: string): ResourceDef | undefined {
-  return resources.find((r) => r.namespace === ns && r.name === name);
-}
+const RBAC_RELATIONS = {
+  subject: "subject",
+  granted: "granted",
+  binding: "binding",
+  parent: "parent",
+  globalWildcard: "any_any_any",
+} as const;
 
 function addRelation(resource: ResourceDef, rel: RelationDef): void {
   resource.relations.push(rel);
@@ -161,7 +46,7 @@ function ref(name: string): RelationBody {
 }
 
 function subref(name: string, subname: string): RelationBody {
-  return { kind: "subref", name: `t_${name}`, subname };
+  return { kind: "subref", name: slotName(name), subname };
 }
 
 function or(...members: RelationBody[]): RelationBody {
@@ -172,6 +57,32 @@ function and(...members: RelationBody[]): RelationBody {
   return { kind: "and", members };
 }
 
+// ─── RBAC Scaffold ──────────────────────────────────────────────────
+
+export function resolveRBACScaffold(resources: ResourceDef[]): ScaffoldResult {
+  const role = findResource(resources, "rbac", "role");
+  const roleBinding = findResource(resources, "rbac", "role_binding");
+  const workspace = findResource(resources, "rbac", "workspace");
+
+  if (!role || !roleBinding || !workspace) {
+    const missing = [
+      !role && "rbac/role",
+      !roleBinding && "rbac/role_binding",
+      !workspace && "rbac/workspace",
+    ].filter(Boolean);
+    return {
+      scaffold: null,
+      warnings: [
+        `RBAC scaffold incomplete — missing ${missing.join(", ")}. V1 permission expansion skipped.`,
+      ],
+    };
+  }
+
+  return { scaffold: { role, roleBinding, workspace }, warnings: [] };
+}
+
+// ─── V1 Permission Expansion ────────────────────────────────────────
+
 /**
  * Expands V1WorkspacePermission declarations into SpiceDB relations.
  * Explicit, no string parsing, no interpolation.
@@ -179,25 +90,19 @@ function and(...members: RelationBody[]): RelationBody {
 export function expandV1Permissions(
   baseResources: ResourceDef[],
   permissions: V1Extension[],
-): ResourceDef[] {
-  const resources = baseResources.map((r) => ({
-    ...r,
-    relations: [...r.relations],
-  }));
+): ExpansionResult {
+  const resources = cloneResources(baseResources);
 
-  // Ensure rbac/principal exists
   if (!resources.some((r) => r.name === "principal" && r.namespace === "rbac")) {
     resources.unshift({ name: "principal", namespace: "rbac", relations: [] });
   }
 
-  const role = findResource(resources, "rbac", "role");
-  const roleBinding = findResource(resources, "rbac", "role_binding");
-  const workspace = findResource(resources, "rbac", "workspace");
+  const { scaffold, warnings } = resolveRBACScaffold(resources);
+  if (!scaffold) return { resources, warnings };
 
-  if (!role || !roleBinding || !workspace) return resources;
+  const { role, roleBinding, workspace } = scaffold;
 
   const addedBoolRelations = new Set<string>();
-  // Seed with existing bool relations on role
   for (const rel of role.relations) {
     if (rel.body.kind === "bool") addedBoolRelations.add(rel.name);
   }
@@ -207,17 +112,15 @@ export function expandV1Permissions(
   for (const perm of permissions) {
     const { application: app, resource: res, verb, v2Perm: v2 } = perm;
 
-    // 1. Role: add 4 bool relations for the permission hierarchy
     addBoolRelation(role, `${app}_any_any`, addedBoolRelations);
     addBoolRelation(role, `${app}_${res}_any`, addedBoolRelations);
     addBoolRelation(role, `${app}_any_${verb}`, addedBoolRelations);
     addBoolRelation(role, `${app}_${res}_${verb}`, addedBoolRelations);
 
-    // 2. Role: add computed permission as union of hierarchy
     addRelation(role, {
       name: v2,
       body: or(
-        ref("any_any_any"),
+        ref(RBAC_RELATIONS.globalWildcard),
         ref(`${app}_any_any`),
         ref(`${app}_${res}_any`),
         ref(`${app}_any_${verb}`),
@@ -225,25 +128,21 @@ export function expandV1Permissions(
       ),
     });
 
-    // 3. RoleBinding: add intersection permission
     addRelation(roleBinding, {
       name: v2,
-      body: and(ref("subject"), subref("granted", v2)),
+      body: and(ref(RBAC_RELATIONS.subject), subref(RBAC_RELATIONS.granted, v2)),
     });
 
-    // 4. Workspace: add union permission from bindings + parent
     addRelation(workspace, {
       name: v2,
-      body: or(subref("binding", v2), subref("parent", v2)),
+      body: or(subref(RBAC_RELATIONS.binding, v2), subref(RBAC_RELATIONS.parent, v2)),
     });
 
-    // 5. Accumulate read-verb permissions for view_metadata
     if (verb === "read") {
       viewMetadataRefs.push(v2);
     }
   }
 
-  // Emit accumulated view_metadata
   if (viewMetadataRefs.length > 0) {
     addRelation(workspace, {
       name: "view_metadata",
@@ -251,22 +150,55 @@ export function expandV1Permissions(
     });
   }
 
-  return resources;
+  return { resources, warnings };
+}
+
+// ─── CascadeDeletePolicy Expansion ──────────────────────────────────
+
+function hasRelation(resource: ResourceDef, name: string): boolean {
+  return resource.relations.some((r) => r.name === name);
 }
 
 /**
  * Expands CascadeDeletePolicy declarations into SpiceDB permissions.
  * For each policy, adds a "delete" permission on the child resource that
- * resolves through the parent relation's delete permission.
+ * resolves through the parent relation's delete permission, and wires the
+ * "delete" permission through the full RBAC chain (role -> role_binding ->
+ * workspace) so the arrow reference is resolvable.
  */
 export function expandCascadeDeletePolicies(
   resources: ResourceDef[],
   policies: CascadeDeleteEntry[],
 ): ResourceDef[] {
-  const result = resources.map((r) => ({
-    ...r,
-    relations: [...r.relations],
-  }));
+  if (policies.length === 0) return cloneResources(resources);
+
+  const result = cloneResources(resources);
+
+  const { scaffold } = resolveRBACScaffold(result);
+  if (scaffold) {
+    const { role, roleBinding, workspace } = scaffold;
+
+    if (!hasRelation(role, "delete")) {
+      addRelation(role, {
+        name: "delete",
+        body: ref(RBAC_RELATIONS.globalWildcard),
+      });
+    }
+
+    if (!hasRelation(roleBinding, "delete")) {
+      addRelation(roleBinding, {
+        name: "delete",
+        body: and(ref(RBAC_RELATIONS.subject), subref(RBAC_RELATIONS.granted, "delete")),
+      });
+    }
+
+    if (!hasRelation(workspace, "delete")) {
+      addRelation(workspace, {
+        name: "delete",
+        body: or(subref(RBAC_RELATIONS.binding, "delete"), subref(RBAC_RELATIONS.parent, "delete")),
+      });
+    }
+  }
 
   for (const policy of policies) {
     const nsPrefix = policy.childApplication.toLowerCase();
@@ -274,12 +206,11 @@ export function expandCascadeDeletePolicies(
     const child = result.find((r) => r.name === childName && r.namespace === nsPrefix);
     if (!child) continue;
 
-    const alreadyHasDelete = child.relations.some((r) => r.name === "delete");
-    if (alreadyHasDelete) continue;
+    if (hasRelation(child, "delete")) continue;
 
     addRelation(child, {
       name: "delete",
-      body: { kind: "subref", name: `t_${policy.parentRelation}`, subname: "delete" },
+      body: { kind: "subref", name: slotName(policy.parentRelation), subname: "delete" },
     });
   }
 

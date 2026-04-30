@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { generateIR } from "../../src/lib.js";
+import { generateIR, IR_VERSION } from "../../src/lib.js";
 import { expandCascadeDeletePolicies } from "../../src/expand.js";
 import { compilePipeline, type PipelineResult } from "../helpers/pipeline.js";
 
@@ -135,9 +135,9 @@ describe("IR generation with annotations", () => {
     expect(hostAnnotations["retention_days"]).toBe("90");
   });
 
-  it("IR version is 1.2.0", () => {
+  it("IR version matches IR_VERSION constant", () => {
     const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
-    expect(ir.version).toBe("1.2.0");
+    expect(ir.version).toBe(IR_VERSION);
   });
 
   it("IR omits annotations field when no annotations exist", () => {
@@ -148,7 +148,7 @@ describe("IR generation with annotations", () => {
   it("IR contains all expected top-level fields", () => {
     const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
     expect(ir.generatedAt).toBeDefined();
-    expect(ir.source).toBe("test.tsp");
+    expect(ir.source).toBe("schema/test.tsp");
     expect(ir.resources.length).toBeGreaterThan(0);
     expect(ir.extensions.length).toBeGreaterThan(0);
     expect(ir.spicedb).toContain("definition rbac/");
@@ -189,5 +189,21 @@ describe("CascadeDeletePolicy discovery and expansion", () => {
     const host = doubleExpanded.find((r) => r.name === "host" && r.namespace === "inventory")!;
     const deleteCount = host.relations.filter((r) => r.name === "delete").length;
     expect(deleteCount).toBe(1);
+  });
+
+  it("adds delete permission to rbac/workspace in SpiceDB output", () => {
+    expect(pipeline.spicedbOutput).toContain("permission delete = t_binding->delete + t_parent->delete");
+  });
+
+  it("adds delete permission to rbac/role_binding in SpiceDB output", () => {
+    expect(pipeline.spicedbOutput).toContain("permission delete = (subject & t_granted->delete)");
+  });
+
+  it("adds delete permission to rbac/role in SpiceDB output", () => {
+    expect(pipeline.spicedbOutput).toContain("permission delete = any_any_any");
+  });
+
+  it("produces zero validation diagnostics for the expanded schema", () => {
+    expect(pipeline.diagnostics).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import type { Namespace } from "@typespec/compiler";
-import type { RelationBody } from "./types.js";
+import type { RelationBody, ResourceDef, AnnotationEntry } from "./types.js";
 
 export function getNamespaceFQN(ns: Namespace | undefined): string {
   if (!ns) return "";
@@ -33,4 +33,34 @@ export function bodyToZed(body: RelationBody): string {
       return `(${inner})`;
     }
   }
+}
+
+export function slotName(relName: string): string {
+  return `t_${relName}`;
+}
+
+export function flattenAnnotations(
+  annotations: Map<string, AnnotationEntry[]>,
+): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const [resourceKey, entries] of annotations) {
+    out[resourceKey] = Object.fromEntries(entries.map(e => [e.key, e.value]));
+  }
+  return out;
+}
+
+export function findResource(
+  resources: ResourceDef[],
+  ns: string,
+  name: string,
+): ResourceDef | undefined {
+  return resources.find((r) => r.namespace === ns && r.name === name);
+}
+
+export function cloneResources(resources: ResourceDef[]): ResourceDef[] {
+  return resources.map((r) => ({ ...r, relations: [...r.relations] }));
+}
+
+export function isAssignable(body: RelationBody): boolean {
+  return body.kind === "assignable" || body.kind === "bool";
 }

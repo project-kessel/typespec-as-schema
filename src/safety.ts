@@ -10,6 +10,7 @@
 // failing fast with actionable diagnostics.
 
 import type { V1Extension, ResourceDef } from "./types.js";
+import { slotName } from "./utils.js";
 
 // ─── Configuration ──────────────────────────────────────────────────
 
@@ -74,13 +75,9 @@ export class ExpansionTimeoutError extends Error {
 }
 
 /**
- * Runs an expansion function and checks wall-clock duration after completion.
- *
- * Note: This is a post-hoc measurement, not a preemptive timeout. Expansion
- * is synchronous and O(N) — bounded by the complexity budget check that runs
- * before expansion starts. This guard catches bugs in expansion code itself
- * (e.g., accidentally quadratic logic) rather than protecting against
- * arbitrary user computation (which TypeSpec's architecture prevents).
+ * @deprecated Inlined into `compilePipeline`. Kept for backward compatibility
+ * with external consumers. Prefer using `compilePipeline` with `PipelineOptions`
+ * to configure safety limits.
  */
 export function withExpansionTimeout<T>(
   fn: () => T,
@@ -161,9 +158,8 @@ export function validatePermissionExpressions(
   for (const res of resources) {
     const key = `${res.namespace}/${res.name}`;
     const names = new Set(res.relations.map((r) => r.name));
-    // Also include t_-prefixed versions (generated for assignables)
     for (const rel of res.relations) {
-      names.add(`t_${rel.name}`);
+      names.add(slotName(rel.name));
     }
     relationIndex.set(key, names);
   }
@@ -173,7 +169,19 @@ export function validatePermissionExpressions(
   for (const res of resources) {
     for (const rel of res.relations) {
       allRelationNames.add(rel.name);
-      allRelationNames.add(`t_${rel.name}`);
+      allRelationNames.add(slotName(rel.name));
+    }
+  }
+
+  // Map local relation names to their target types for subref resolution.
+  // Key: "resourceKey.t_relName", Value: target type key (e.g., "rbac/workspace")
+  const targetTypeMap = new Map<string, string>();
+  for (const res of resources) {
+    const rk = `${res.namespace}/${res.name}`;
+    for (const rel of res.relations) {
+      if (rel.body.kind === "assignable" || rel.body.kind === "bool") {
+        targetTypeMap.set(`${rk}.${slotName(rel.name)}`, rel.body.target);
+      }
     }
   }
 
@@ -182,7 +190,7 @@ export function validatePermissionExpressions(
     const localNames = relationIndex.get(resourceKey)!;
 
     for (const rel of res.relations) {
-      validateBody(rel.body, resourceKey, rel.name, localNames, allRelationNames, diagnostics);
+      validateBody(rel.body, resourceKey, rel.name, localNames, allRelationNames, relationIndex, targetTypeMap, diagnostics);
     }
   }
 
@@ -195,11 +203,13 @@ function validateBody(
   relationName: string,
   localNames: Set<string>,
   allNames: Set<string>,
+  relationIndex: Map<string, Set<string>>,
+  targetTypeMap: Map<string, string>,
   diagnostics: ValidationDiagnostic[],
 ): void {
   switch (body.kind) {
     case "ref":
-      if (!localNames.has(body.name) && !localNames.has(`t_${body.name}`)) {
+      if (!localNames.has(body.name) && !localNames.has(slotName(body.name))) {
         diagnostics.push({
           resource: resourceKey,
           relation: relationName,
@@ -209,7 +219,7 @@ function validateBody(
       }
       break;
 
-    case "subref":
+    case "subref": {
       // The left side (e.g., t_workspace) should be a local relation
       if (!localNames.has(body.name)) {
         diagnostics.push({
@@ -218,9 +228,22 @@ function validateBody(
           expression: `${body.name}->${body.subname}`,
           message: `Unknown relation "${body.name}" in ${resourceKey}.${relationName}`,
         });
+        break;
       }
-      // The right side (e.g., inventory_host_view) should exist somewhere
-      if (!allNames.has(body.subname)) {
+      // Resolve the target type and check the right-hand side against it
+      const targetType = targetTypeMap.get(`${resourceKey}.${body.name}`);
+      if (targetType) {
+        const targetNames = relationIndex.get(targetType);
+        if (targetNames && !targetNames.has(body.subname) && !targetNames.has(slotName(body.subname))) {
+          diagnostics.push({
+            resource: resourceKey,
+            relation: relationName,
+            expression: `${body.name}->${body.subname}`,
+            message: `"${body.subname}" does not exist on target type "${targetType}" (referenced via ${body.name} in ${resourceKey}.${relationName})`,
+          });
+        }
+        // If targetType is not in relationIndex, it's an external/platform type -- skip
+      } else if (!allNames.has(body.subname)) {
         diagnostics.push({
           resource: resourceKey,
           relation: relationName,
@@ -229,11 +252,12 @@ function validateBody(
         });
       }
       break;
+    }
 
     case "or":
     case "and":
       for (const member of body.members) {
-        validateBody(member, resourceKey, relationName, localNames, allNames, diagnostics);
+        validateBody(member, resourceKey, relationName, localNames, allNames, relationIndex, targetTypeMap, diagnostics);
       }
       break;
 

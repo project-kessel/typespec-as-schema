@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePermissionExpr } from "../../src/lib.js";
+import { parsePermissionExpr, slotName } from "../../src/lib.js";
 
 describe("parsePermissionExpr", () => {
   it("returns null for empty string", () => {
@@ -12,16 +12,16 @@ describe("parsePermissionExpr", () => {
   });
 
   it("parses a simple reference", () => {
-    expect(parsePermissionExpr("t_workspace")).toEqual({
+    expect(parsePermissionExpr(slotName("workspace"))).toEqual({
       kind: "ref",
-      name: "t_workspace",
+      name: slotName("workspace"),
     });
   });
 
   it("parses a dot-separated sub-reference with t_ prefix", () => {
     expect(parsePermissionExpr("workspace.inventory_host_view")).toEqual({
       kind: "subref",
-      name: "t_workspace",
+      name: slotName("workspace"),
       subname: "inventory_host_view",
     });
   });
@@ -31,8 +31,8 @@ describe("parsePermissionExpr", () => {
     expect(result).toEqual({
       kind: "or",
       members: [
-        { kind: "subref", name: "t_binding", subname: "inventory_host_view" },
-        { kind: "subref", name: "t_parent", subname: "inventory_host_view" },
+        { kind: "subref", name: slotName("binding"), subname: "inventory_host_view" },
+        { kind: "subref", name: slotName("parent"), subname: "inventory_host_view" },
       ],
     });
   });
@@ -55,7 +55,7 @@ describe("parsePermissionExpr", () => {
       kind: "and",
       members: [
         { kind: "ref", name: "subject" },
-        { kind: "subref", name: "t_granted", subname: "inventory_host_view" },
+        { kind: "subref", name: slotName("granted"), subname: "inventory_host_view" },
       ],
     });
   });
@@ -84,7 +84,7 @@ describe("parsePermissionExpr", () => {
       kind: "or",
       members: [
         { kind: "ref", name: "a" },
-        { kind: "subref", name: "t_b", subname: "c" },
+        { kind: "subref", name: slotName("b"), subname: "c" },
         { kind: "ref", name: "d" },
       ],
     });

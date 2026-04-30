@@ -8,7 +8,7 @@ import {
   OutputSizeError,
   DEFAULT_LIMITS,
 } from "../../src/safety.js";
-import type { V1Extension, ResourceDef } from "../../src/lib.js";
+import { slotName, type V1Extension, type ResourceDef } from "../../src/lib.js";
 
 // ─── Complexity Budget ──────────────────────────────────────────────
 
@@ -55,8 +55,11 @@ describe("validateComplexityBudget", () => {
 });
 
 // ─── Expansion Timeout ──────────────────────────────────────────────
+// Tests deprecated API for backward compat.
+// The canonical timeout path is now inlined in compilePipeline and covered
+// by test/unit/pipeline.test.ts.
 
-describe("withExpansionTimeout", () => {
+describe("withExpansionTimeout (deprecated)", () => {
   it("returns result when expansion completes within timeout", () => {
     const result = withExpansionTimeout(() => 42);
     expect(result).toBe(42);
@@ -111,9 +114,17 @@ describe("validatePermissionExpressions", () => {
           { name: "parent", body: { kind: "assignable", target: "rbac/workspace", cardinality: "AtMostOne" } },
           { name: "binding", body: { kind: "assignable", target: "rbac/role_binding", cardinality: "Any" } },
           { name: "some_perm", body: { kind: "or", members: [
-            { kind: "subref", name: "t_binding", subname: "some_perm" },
-            { kind: "subref", name: "t_parent", subname: "some_perm" },
+            { kind: "subref", name: slotName("binding"), subname: "some_perm" },
+            { kind: "subref", name: slotName("parent"), subname: "some_perm" },
           ] } },
+        ],
+      },
+      {
+        name: "role_binding",
+        namespace: "rbac",
+        relations: [
+          { name: "subject", body: { kind: "assignable", target: "rbac/principal", cardinality: "Any" } },
+          { name: "some_perm", body: { kind: "ref", name: "subject" } },
         ],
       },
     ];
@@ -137,14 +148,21 @@ describe("validatePermissionExpressions", () => {
     expect(diagnostics[0].message).toContain("nonexistent_relation");
   });
 
-  it("detects unknown subref target", () => {
+  it("detects unknown subref target on resolved type", () => {
     const resources: ResourceDef[] = [
       {
         name: "workspace",
         namespace: "rbac",
         relations: [
           { name: "binding", body: { kind: "assignable", target: "rbac/role_binding", cardinality: "Any" } },
-          { name: "bad_perm", body: { kind: "subref", name: "t_binding", subname: "totally_fake_perm" } },
+          { name: "bad_perm", body: { kind: "subref", name: slotName("binding"), subname: "totally_fake_perm" } },
+        ],
+      },
+      {
+        name: "role_binding",
+        namespace: "rbac",
+        relations: [
+          { name: "subject", body: { kind: "assignable", target: "rbac/principal", cardinality: "Any" } },
         ],
       },
     ];
@@ -159,6 +177,53 @@ describe("validatePermissionExpressions", () => {
         namespace: "inventory",
         relations: [
           { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
+        ],
+      },
+    ];
+    const diagnostics = validatePermissionExpressions(resources);
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it("detects subref to permission that doesn't exist on resolved target type", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "workspace",
+        namespace: "rbac",
+        relations: [
+          { name: "binding", body: { kind: "assignable", target: "rbac/role_binding", cardinality: "Any" } },
+          { name: "view", body: { kind: "ref", name: "binding" } },
+        ],
+      },
+      {
+        name: "role_binding",
+        namespace: "rbac",
+        relations: [
+          { name: "subject", body: { kind: "assignable", target: "rbac/principal", cardinality: "Any" } },
+        ],
+      },
+      {
+        name: "host",
+        namespace: "inventory",
+        relations: [
+          { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
+          { name: "bad_perm", body: { kind: "subref", name: slotName("workspace"), subname: "nonexistent_on_workspace" } },
+        ],
+      },
+    ];
+    const diagnostics = validatePermissionExpressions(resources);
+    expect(diagnostics.length).toBeGreaterThan(0);
+    expect(diagnostics[0].message).toContain("nonexistent_on_workspace");
+    expect(diagnostics[0].message).toContain("rbac/workspace");
+  });
+
+  it("skips subref validation when target type is not in schema (external type)", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "host",
+        namespace: "inventory",
+        relations: [
+          { name: "workspace", body: { kind: "assignable", target: "external/service", cardinality: "ExactlyOne" } },
+          { name: "view", body: { kind: "subref", name: slotName("workspace"), subname: "some_perm" } },
         ],
       },
     ];
