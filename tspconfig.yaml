@@ -1,8 +1,5 @@
 emit:
   - "@typespec/json-schema"
-  - "typespec-as-schema"
 options:
   "@typespec/json-schema":
     emitter-output-dir: "{output-dir}/json-schema"
-  "typespec-as-schema":
-    output-format: "spicedb"

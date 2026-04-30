@@ -2,20 +2,13 @@
   "name": "typespec-as-schema",
   "version": "1.0.0",
   "type": "module",
-  "main": "dist/index.js",
   "tspMain": "lib/kessel-extensions.tsp",
-  "exports": {
-    ".": {
-      "typespec": "./lib/kessel-extensions.tsp",
-      "default": "./dist/index.js"
-    }
-  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "compile": "npm run build && tsp compile schema/main.tsp",
     "emit:spicedb": "tsx src/spicedb-emitter.ts schema/main.tsp",
-    "emit:ir": "tsx src/spicedb-emitter.ts schema/main.tsp --ir go-consumer/schema/resources.json",
+    "emit:ir": "tsx src/spicedb-emitter.ts schema/main.tsp --ir go-loader-example/schema/resources.json",
     "emit:metadata": "tsx src/spicedb-emitter.ts schema/main.tsp --metadata"
   },
   "keywords": [],
@@ -27,6 +20,7 @@
     "@typespec/json-schema": "^1.10.0"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.1"

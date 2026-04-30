@@ -1,4 +1,4 @@
-# TypeSpec → Go Consumer (Embedded IR Example)
+# TypeSpec → Go Loader Example (Embedded IR)
 
 This demonstrates how a Go service consumes TypeSpec schemas **without requiring Node.js at runtime**.
 
@@ -41,14 +41,14 @@ make all
 
 # Or step by step:
 make compile      # validate schema + emit JSON Schema (tsp-output/)
-make emit-ir      # write go-consumer/schema/resources.json
+make emit-ir      # write go-loader-example/schema/resources.json
 make go-build     # compile Go binary with embedded IR
 
 # Run the standalone binary (no Node.js required)
 make run-consumer
 
 # Or run directly:
-./go-consumer/bin/schema-consumer
+./go-loader-example/bin/schema-consumer
 ```
 
 ## What's in resources.json?
@@ -64,14 +64,15 @@ The IR file is the complete output of a single TypeSpec compilation:
 | `extensions`  | Workspace permission extension params (from aliases) |
 | `spicedb`     | Generated SpiceDB/Zed schema as a string          |
 | `metadata`    | Per-service permission and resource lists          |
-| `jsonSchemas` | Unified JSON schemas (ExactlyOne assignable `_id` + extension `jsonSchema_addField`) |
+| `jsonSchemas` | Unified JSON schemas (ExactlyOne assignable `_id` fields)  |
+| `annotations` | Optional key-value metadata per resource (feature flags, retention, etc.) |
 
 ## Go API
 
 ```go
 package main
 
-import "github.com/project-kessel/schema-unify/typespec-go-consumer/schema"
+import "github.com/project-kessel/schema-unify/typespec-go-loader-example/schema"
 
 func main() {
     // Option A: Load from the embedded binary (production)
@@ -103,7 +104,7 @@ npm run emit:ir
 # or
 make emit-ir
 # or
-npx tsx src/spicedb-emitter.ts schema/main.tsp --ir go-consumer/schema/resources.json
+npx tsx src/spicedb-emitter.ts schema/main.tsp --ir go-loader-example/schema/resources.json
 ```
 
 Then rebuild the Go binary to pick up the changes:

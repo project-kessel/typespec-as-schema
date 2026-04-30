@@ -1,134 +1,60 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
-import { fileURLToPath } from "url";
-import {
-  compile,
-  NodeHost,
-  discoverResources,
-  generateSpiceDB,
-  generateMetadata,
-  type ResourceDef,
-  type V1Extension,
-} from "../../src/lib.js";
-import { discoverV1Permissions, expandV1Permissions } from "../../src/expand.js";
+import { generateMetadata } from "../../src/lib.js";
+import { parseZedDefinitions } from "../helpers/zed-parser.js";
+import { compilePipeline, goldenDir, type PipelineResult } from "../helpers/pipeline.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pocRoot = path.resolve(__dirname, "../..");
-const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
-const goldenDir = path.resolve(pocRoot, "../../evaluation/golden-outputs");
-
-// Shared state populated by beforeAll
-let resources: ResourceDef[];
-let extensions: V1Extension[];
-let fullSchema: ResourceDef[];
-let spicedbOutput: string;
+let pipeline: PipelineResult;
 
 beforeAll(async () => {
-  const program = await compile(NodeHost, mainTsp, { noEmit: true });
-  const discovered = discoverResources(program);
-  resources = discovered.resources;
-  extensions = discoverV1Permissions(program);
-  fullSchema = expandV1Permissions(resources, extensions);
-  spicedbOutput = generateSpiceDB(fullSchema);
+  pipeline = await compilePipeline();
 }, 30_000);
-
-// --- Helpers ---
-
-interface DefinitionBlock {
-  name: string;
-  permissions: string[];
-  relations: string[];
-}
-
-function parseZedDefinitions(zedText: string): Map<string, DefinitionBlock> {
-  const blocks = new Map<string, DefinitionBlock>();
-  const lines = zedText.split("\n");
-  let current: DefinitionBlock | null = null;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (line.startsWith("//") || line === "") continue;
-
-    const defMatch = line.match(/^definition\s+(\S+)\s*\{/);
-    if (defMatch) {
-      current = { name: defMatch[1], permissions: [], relations: [] };
-      blocks.set(defMatch[1], current);
-      continue;
-    }
-
-    if (line === "}" || line === "{}") {
-      if (line === "{}" && current) {
-        // empty definition like `definition rbac/principal {}`
-      }
-      current = null;
-      continue;
-    }
-
-    if (!current) continue;
-
-    if (line.startsWith("permission ")) {
-      current.permissions.push(line);
-    } else if (line.startsWith("relation ")) {
-      current.relations.push(line);
-    }
-  }
-
-  return blocks;
-}
-
-const NAMESPACE_MAP: Record<string, string> = {
-  "inventory/host": "hbi/host",
-};
-
-function normalizedName(name: string): string {
-  return NAMESPACE_MAP[name] ?? name;
-}
 
 // --- Gate Tests ---
 
 describe("G1: Authorization Completeness", () => {
   it("produces definition blocks for all four RBAC types", () => {
-    expect(spicedbOutput).toContain("definition rbac/principal {");
-    expect(spicedbOutput).toContain("definition rbac/role {");
-    expect(spicedbOutput).toContain("definition rbac/role_binding {");
-    expect(spicedbOutput).toContain("definition rbac/workspace {");
+    expect(pipeline.spicedbOutput).toContain("definition rbac/principal {");
+    expect(pipeline.spicedbOutput).toContain("definition rbac/role {");
+    expect(pipeline.spicedbOutput).toContain("definition rbac/role_binding {");
+    expect(pipeline.spicedbOutput).toContain("definition rbac/workspace {");
   });
 
   it("contains relation declarations with type references", () => {
-    expect(spicedbOutput).toMatch(/relation\s+t_\w+:\s+rbac\/\w+/);
+    expect(pipeline.spicedbOutput).toMatch(/relation\s+t_\w+:\s+rbac\/\w+/);
   });
 
   it("contains permission declarations using union (+)", () => {
-    expect(spicedbOutput).toMatch(/permission\s+\w+\s*=\s*.*\+/);
+    expect(pipeline.spicedbOutput).toMatch(/permission\s+\w+\s*=\s*.*\+/);
   });
 
   it("contains permission declarations using intersection (&)", () => {
-    expect(spicedbOutput).toMatch(/permission\s+\w+\s*=\s*\(.*&/);
+    expect(pipeline.spicedbOutput).toMatch(/permission\s+\w+\s*=\s*\(.*&/);
   });
 
   it("contains permission declarations using arrow (->)", () => {
-    expect(spicedbOutput).toMatch(/permission\s+\w+\s*=\s*.*->/);
+    expect(pipeline.spicedbOutput).toMatch(/permission\s+\w+\s*=\s*.*->/);
   });
 });
 
 describe("G2: Data Field Support", () => {
   it("discovers at least one resource and extension", () => {
-    expect(resources.length).toBeGreaterThanOrEqual(1);
-    expect(extensions.length).toBeGreaterThanOrEqual(1);
+    expect(pipeline.resources.length).toBeGreaterThanOrEqual(1);
+    expect(pipeline.extensions.length).toBeGreaterThanOrEqual(1);
   });
 
   it("HBI host resource is discovered", () => {
-    const host = resources.find((r) => r.name === "host");
+    const host = pipeline.resources.find((r) => r.name === "host");
     expect(host).toBeDefined();
   });
 });
 
 describe("G4: Cooperative Extensions", () => {
   it("extensions add permissions to role, role_binding, and workspace", () => {
-    const role = fullSchema.find((r) => r.name === "role" && r.namespace === "rbac");
-    const rb = fullSchema.find((r) => r.name === "role_binding" && r.namespace === "rbac");
-    const ws = fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac");
+    const role = pipeline.fullSchema.find((r) => r.name === "role" && r.namespace === "rbac");
+    const rb = pipeline.fullSchema.find((r) => r.name === "role_binding" && r.namespace === "rbac");
+    const ws = pipeline.fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac");
 
     expect(role!.relations.some((r) => r.name === "inventory_host_view")).toBe(true);
     expect(rb!.relations.some((r) => r.name === "inventory_host_view")).toBe(true);
@@ -136,12 +62,12 @@ describe("G4: Cooperative Extensions", () => {
   });
 
   it("extensions are invoked from HBI/Remediations, not inlined in RBAC", () => {
-    expect(extensions.some((e) => e.application === "inventory")).toBe(true);
-    expect(extensions.some((e) => e.application === "remediations")).toBe(true);
+    expect(pipeline.extensions.some((e) => e.application === "inventory")).toBe(true);
+    expect(pipeline.extensions.some((e) => e.application === "remediations")).toBe(true);
   });
 
   it("no duplicate permission names on role for same extension", () => {
-    const role = fullSchema.find((r) => r.name === "role" && r.namespace === "rbac")!;
+    const role = pipeline.fullSchema.find((r) => r.name === "role" && r.namespace === "rbac")!;
     const names = role.relations.map((r) => r.name);
     const wildcardCounts = new Map<string, number>();
     for (const n of names) {
@@ -157,12 +83,12 @@ describe("G4: Cooperative Extensions", () => {
 
 describe("G5: Cross-Namespace Composition", () => {
   it("HBI host references rbac/workspace in SpiceDB output", () => {
-    expect(spicedbOutput).toContain("relation t_workspace: rbac/workspace");
+    expect(pipeline.spicedbOutput).toContain("relation t_workspace: rbac/workspace");
   });
 
   it("host permissions arrow into workspace permissions", () => {
-    expect(spicedbOutput).toContain("t_workspace->inventory_host_view");
-    expect(spicedbOutput).toContain("t_workspace->inventory_host_update");
+    expect(pipeline.spicedbOutput).toContain("t_workspace->inventory_host_view");
+    expect(pipeline.spicedbOutput).toContain("t_workspace->inventory_host_update");
   });
 });
 
@@ -170,7 +96,7 @@ describe("G5: Cross-Namespace Composition", () => {
 
 describe("M1: Feature Coverage", () => {
   it("RBAC core types: principal, role, role_binding, workspace", () => {
-    const rbacNames = fullSchema
+    const rbacNames = pipeline.fullSchema
       .filter((r) => r.namespace === "rbac")
       .map((r) => r.name)
       .sort();
@@ -178,7 +104,7 @@ describe("M1: Feature Coverage", () => {
   });
 
   it("HBI host with workspace relation and view/update permissions", () => {
-    const host = fullSchema.find((r) => r.name === "host");
+    const host = pipeline.fullSchema.find((r) => r.name === "host");
     expect(host).toBeDefined();
     expect(host!.relations.some((r) => r.name === "workspace")).toBe(true);
     expect(host!.relations.some((r) => r.name === "view")).toBe(true);
@@ -186,36 +112,36 @@ describe("M1: Feature Coverage", () => {
   });
 
   it("remediations is permissions-only — no definition in SpiceDB output", () => {
-    expect(spicedbOutput).not.toMatch(/definition\s+remediations\//);
+    expect(pipeline.spicedbOutput).not.toMatch(/definition\s+remediations\//);
   });
 
   it("namespace separation — RBAC and HBI in separate definitions", () => {
-    const defs = parseZedDefinitions(spicedbOutput);
+    const defs = parseZedDefinitions(pipeline.spicedbOutput);
     const namespaces = new Set([...defs.keys()].map((k) => k.split("/")[0]));
     expect(namespaces.has("rbac")).toBe(true);
     expect(namespaces.has("inventory")).toBe(true);
   });
 
   it("V1WorkspacePermission extension mechanism discovers extensions from aliases", () => {
-    expect(extensions.length).toBeGreaterThanOrEqual(4);
-    expect(extensions.some((e) => e.v2Perm === "inventory_host_view")).toBe(true);
-    expect(extensions.some((e) => e.v2Perm === "inventory_host_update")).toBe(true);
-    expect(extensions.some((e) => e.v2Perm === "remediations_remediation_view")).toBe(true);
-    expect(extensions.some((e) => e.v2Perm === "remediations_remediation_update")).toBe(true);
+    expect(pipeline.extensions.length).toBeGreaterThanOrEqual(4);
+    expect(pipeline.extensions.some((e) => e.v2Perm === "inventory_host_view")).toBe(true);
+    expect(pipeline.extensions.some((e) => e.v2Perm === "inventory_host_update")).toBe(true);
+    expect(pipeline.extensions.some((e) => e.v2Perm === "remediations_remediation_view")).toBe(true);
+    expect(pipeline.extensions.some((e) => e.v2Perm === "remediations_remediation_update")).toBe(true);
   });
 
   it("any_any_any wildcard naming", () => {
-    expect(spicedbOutput).toContain("any_any_any");
-    expect(spicedbOutput).not.toContain("all_all_all");
+    expect(pipeline.spicedbOutput).toContain("any_any_any");
+    expect(pipeline.spicedbOutput).not.toContain("all_all_all");
   });
 
   it("binding workspace relation (not user_grant)", () => {
-    expect(spicedbOutput).toContain("t_binding");
-    expect(spicedbOutput).not.toContain("t_user_grant");
+    expect(pipeline.spicedbOutput).toContain("t_binding");
+    expect(pipeline.spicedbOutput).not.toContain("t_user_grant");
   });
 
   it("t_ prefix on all assignable relations", () => {
-    const defs = parseZedDefinitions(spicedbOutput);
+    const defs = parseZedDefinitions(pipeline.spicedbOutput);
     for (const [, block] of defs) {
       for (const rel of block.relations) {
         const match = rel.match(/relation\s+(t_\w+)/);
@@ -225,18 +151,18 @@ describe("M1: Feature Coverage", () => {
   });
 
   it("view_metadata accumulation on workspace", () => {
-    const ws = fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
+    const ws = pipeline.fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
     const viewMeta = ws.relations.find((r) => r.name === "view_metadata");
     expect(viewMeta).toBeDefined();
-    expect(spicedbOutput).toMatch(/permission view_metadata\s*=/);
+    expect(pipeline.spicedbOutput).toMatch(/permission view_metadata\s*=/);
   });
 
   it("cross-namespace composition — HBI imports RBAC workspace", () => {
-    expect(spicedbOutput).toContain("relation t_workspace: rbac/workspace");
+    expect(pipeline.spicedbOutput).toContain("relation t_workspace: rbac/workspace");
   });
 
   it("metadata output lists permissions and resources per service", () => {
-    const metadata = generateMetadata(resources, extensions);
+    const metadata = generateMetadata(pipeline.resources, pipeline.extensions);
     expect(metadata.inventory).toBeDefined();
     expect(metadata.inventory.permissions).toContain("inventory_host_view");
     expect(metadata.remediations).toBeDefined();
@@ -247,26 +173,23 @@ describe("M1: Feature Coverage", () => {
 // --- M4: Output Correctness (SpiceDB) ---
 
 describe("M4: SpiceDB Output Correctness vs Golden Reference", () => {
-  let goldenDefs: Map<string, DefinitionBlock>;
-  let emitterDefs: Map<string, DefinitionBlock>;
+  let goldenDefs: Map<string, import("../helpers/zed-parser.js").DefinitionBlock>;
+  let emitterDefs: Map<string, import("../helpers/zed-parser.js").DefinitionBlock>;
 
   beforeAll(() => {
     const goldenPath = path.join(goldenDir, "spicedb-reference.zed");
     const goldenText = fs.readFileSync(goldenPath, "utf-8");
     goldenDefs = parseZedDefinitions(goldenText);
-    emitterDefs = parseZedDefinitions(spicedbOutput);
+    emitterDefs = parseZedDefinitions(pipeline.spicedbOutput);
   });
 
   it("emitter produces the same number of definitions as the golden reference", () => {
     expect(emitterDefs.size).toBe(goldenDefs.size);
   });
 
-  it("every golden definition exists in emitter output (with namespace normalization)", () => {
+  it("every golden definition exists in emitter output", () => {
     for (const [goldenName] of goldenDefs) {
-      const lookupName = goldenName;
-      const reverseLookup = Object.entries(NAMESPACE_MAP).find(([, v]) => v === goldenName)?.[0];
-      const found = emitterDefs.has(lookupName) || (reverseLookup && emitterDefs.has(reverseLookup));
-      expect(found, `missing definition: ${goldenName}`).toBe(true);
+      expect(emitterDefs.has(goldenName), `missing definition: ${goldenName}`).toBe(true);
     }
   });
 
@@ -285,7 +208,7 @@ describe("M4: SpiceDB Output Correctness vs Golden Reference", () => {
     expect(emitter.permissions.length).toBe(golden.permissions.length);
   });
 
-  it("rbac/role has the same relation count (13 wildcards + any_any_any)", () => {
+  it("rbac/role has the same relation count", () => {
     const golden = goldenDefs.get("rbac/role")!;
     const emitter = emitterDefs.get("rbac/role")!;
     expect(emitter.relations.length).toBe(golden.relations.length);
@@ -325,9 +248,9 @@ describe("M4: SpiceDB Output Correctness vs Golden Reference", () => {
     expect(emitter.relations.length).toBe(golden.relations.length);
   });
 
-  it("host definition (inventory/host or hbi/host) matches structurally", () => {
+  it("host definition matches structurally", () => {
     const emitterHost = emitterDefs.get("inventory/host");
-    const goldenHost = goldenDefs.get("hbi/host");
+    const goldenHost = goldenDefs.get("inventory/host");
 
     expect(emitterHost).toBeDefined();
     expect(goldenHost).toBeDefined();
@@ -354,7 +277,7 @@ describe("M4: SpiceDB Output Correctness vs Golden Reference", () => {
 
 describe("M4: Metadata Output Correctness", () => {
   it("matches expected benchmark metadata", () => {
-    const metadata = generateMetadata(resources, extensions);
+    const metadata = generateMetadata(pipeline.resources, pipeline.extensions);
 
     expect(metadata.inventory).toBeDefined();
     expect(metadata.inventory.permissions).toEqual(
@@ -374,7 +297,7 @@ describe("M4: Metadata Output Correctness", () => {
 
 describe("SpiceDB structural conventions", () => {
   it("every relation uses t_ prefix", () => {
-    const lines = spicedbOutput.split("\n");
+    const lines = pipeline.spicedbOutput.split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed.startsWith("relation ")) {
@@ -384,7 +307,7 @@ describe("SpiceDB structural conventions", () => {
   });
 
   it("every assignable relation has a matching permission wrapper", () => {
-    const defs = parseZedDefinitions(spicedbOutput);
+    const defs = parseZedDefinitions(pipeline.spicedbOutput);
     for (const [, block] of defs) {
       for (const rel of block.relations) {
         const relName = rel.match(/relation (t_\w+)/)?.[1];

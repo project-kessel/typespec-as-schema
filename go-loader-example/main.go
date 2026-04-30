@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/project-kessel/schema-unify/typespec-go-consumer/schema"
+	"github.com/project-kessel/schema-unify/typespec-go-loader-example/schema"
 )
 
 func main() {
@@ -27,6 +27,7 @@ func main() {
 	printResources(ir)
 	printExtensions(ir)
 	printMetadata(ir)
+	printAnnotations(ir)
 	printSpiceDBPreview(ir)
 }
 
@@ -62,6 +63,20 @@ func printMetadata(ir *schema.IntermediateRepresentation) {
 		}
 		if len(meta.Resources) > 0 {
 			fmt.Printf("    resources:   %s\n", strings.Join(meta.Resources, ", "))
+		}
+	}
+	fmt.Println()
+}
+
+func printAnnotations(ir *schema.IntermediateRepresentation) {
+	if len(ir.Annotations) == 0 {
+		return
+	}
+	fmt.Println("=== Resource Annotations ===")
+	for resource, kvs := range ir.Annotations {
+		fmt.Printf("  %s:\n", resource)
+		for key, value := range kvs {
+			fmt.Printf("    %s: %s\n", key, value)
 		}
 	}
 	fmt.Println()

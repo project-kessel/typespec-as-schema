@@ -6,6 +6,11 @@ describe("parsePermissionExpr", () => {
     expect(parsePermissionExpr("")).toBeNull();
   });
 
+  it("returns null for whitespace-only string", () => {
+    expect(parsePermissionExpr("   ")).toBeNull();
+    expect(parsePermissionExpr("\t")).toBeNull();
+  });
+
   it("parses a simple reference", () => {
     expect(parsePermissionExpr("t_workspace")).toEqual({
       kind: "ref",
@@ -60,5 +65,60 @@ describe("parsePermissionExpr", () => {
       kind: "ref",
       name: "any_any_any",
     });
+  });
+
+  it("parses parenthesized expression", () => {
+    const result = parsePermissionExpr("(a & b)");
+    expect(result).toEqual({
+      kind: "and",
+      members: [
+        { kind: "ref", name: "a" },
+        { kind: "ref", name: "b" },
+      ],
+    });
+  });
+
+  it("handles mixed union and arrow operators", () => {
+    const result = parsePermissionExpr("a + b->c + d");
+    expect(result).toEqual({
+      kind: "or",
+      members: [
+        { kind: "ref", name: "a" },
+        { kind: "subref", name: "t_b", subname: "c" },
+        { kind: "ref", name: "d" },
+      ],
+    });
+  });
+});
+
+describe("parsePermissionExpr: malformed inputs", () => {
+  it("throws on unexpected characters", () => {
+    expect(() => parsePermissionExpr("a ! b")).toThrow(/Unexpected character/);
+    expect(() => parsePermissionExpr("a @ b")).toThrow(/Unexpected character/);
+    expect(() => parsePermissionExpr("123")).toThrow(/Unexpected character/);
+  });
+
+  it("throws on trailing operator with no operand", () => {
+    expect(() => parsePermissionExpr("a +")).toThrow();
+  });
+
+  it("throws on leading operator with no left operand", () => {
+    expect(() => parsePermissionExpr("+ a")).toThrow();
+  });
+
+  it("throws on arrow with no right-hand identifier", () => {
+    expect(() => parsePermissionExpr("a->")).toThrow();
+  });
+
+  it("throws on unclosed parenthesis", () => {
+    expect(() => parsePermissionExpr("(a & b")).toThrow();
+  });
+
+  it("throws on double operators", () => {
+    expect(() => parsePermissionExpr("a + + b")).toThrow();
+  });
+
+  it("throws on empty parentheses", () => {
+    expect(() => parsePermissionExpr("()")).toThrow();
   });
 });

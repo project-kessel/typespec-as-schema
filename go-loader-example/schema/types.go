@@ -4,14 +4,15 @@ package schema
 // It captures the full type graph: resources, extensions, generated SpiceDB schema,
 // service metadata, and unified JSON schemas -- all from a single TypeSpec compilation.
 type IntermediateRepresentation struct {
-	Version     string                       `json:"version"`
-	GeneratedAt string                       `json:"generatedAt"`
-	Source      string                       `json:"source"`
-	Resources   []ResourceDef                `json:"resources"`
-	Extensions  []V1Extension                `json:"extensions"`
-	SpiceDB     string                       `json:"spicedb"`
-	Metadata    map[string]ServiceMetadata   `json:"metadata"`
-	JSONSchemas map[string]UnifiedJSONSchema `json:"jsonSchemas"`
+	Version     string                                `json:"version"`
+	GeneratedAt string                                `json:"generatedAt"`
+	Source      string                                `json:"source"`
+	Resources   []ResourceDef                         `json:"resources"`
+	Extensions  []V1Extension                         `json:"extensions"`
+	SpiceDB     string                                `json:"spicedb"`
+	Metadata    map[string]ServiceMetadata             `json:"metadata"`
+	JSONSchemas map[string]UnifiedJSONSchema           `json:"jsonSchemas"`
+	Annotations map[string]map[string]string           `json:"annotations,omitempty"`
 }
 
 type ResourceDef struct {

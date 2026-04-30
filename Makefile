@@ -2,7 +2,7 @@
 #
 # Build flow:
 #   1. tsp compile   — validate schema, emit JSON Schema (tsp-output/)
-#   2. emit-ir       — walk type graph → go-consumer/schema/resources.json
+#   2. emit-ir       — walk type graph → go-loader-example/schema/resources.json
 #   3. go-build      — Go binary with embedded IR
 #
 # Layout: schema/ = adopter modules + main.tsp | lib/ = platform .tsp | src/ = interpreter (TS)
@@ -14,8 +14,8 @@ TSP       := npx tsp
 TSX       := npx tsx
 EMITTER   := src/spicedb-emitter.ts
 MAIN_TSP  := schema/main.tsp
-IR_OUT    := go-consumer/schema/resources.json
-GO_BIN    := go-consumer/bin/schema-consumer
+IR_OUT    := go-loader-example/schema/resources.json
+GO_BIN    := go-loader-example/bin/schema-consumer
 SAMPLES   := samples/demo-output.txt
 
 .PHONY: all clean build compile emit-ir emit-spicedb emit-metadata demo run samples run-consumer go-build
@@ -32,7 +32,7 @@ emit-ir:
 	$(TSX) $(EMITTER) $(MAIN_TSP) --ir $(IR_OUT)
 
 go-build:
-	cd go-consumer && go build -o bin/schema-consumer .
+	cd go-loader-example && go build -o bin/schema-consumer .
 
 # End-to-end console tour for reviewers (matches ts-as-schema POC pattern)
 demo:
@@ -58,7 +58,7 @@ samples:
 	@$(MAKE) demo >> $(SAMPLES) 2>&1
 
 run-consumer: go-build
-	./go-consumer/bin/schema-consumer
+	./go-loader-example/bin/schema-consumer
 
 emit-spicedb:
 	$(TSX) $(EMITTER) $(MAIN_TSP)

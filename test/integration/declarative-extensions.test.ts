@@ -1,90 +1,23 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import * as path from "path";
-import { fileURLToPath } from "url";
-import {
-  compile,
-  NodeHost,
-  discoverResources,
-  generateSpiceDB,
-  generateUnifiedJsonSchemas,
-  type ResourceDef,
-  type UnifiedJsonSchema,
-  type V1Extension,
-} from "../../src/lib.js";
-import {
-  discoverV1Permissions,
-  expandV1Permissions,
-} from "../../src/expand.js";
+import { generateIR } from "../../src/lib.js";
+import { expandCascadeDeletePolicies } from "../../src/expand.js";
+import { compilePipeline, type PipelineResult } from "../helpers/pipeline.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pocRoot = path.resolve(__dirname, "../..");
-const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
-
-let fullSchema: ResourceDef[];
-let spicedbOutput: string;
-let unifiedJsonSchemas: Record<string, UnifiedJsonSchema>;
-let resources: ResourceDef[];
-let extensions: V1Extension[];
+let pipeline: PipelineResult;
 
 beforeAll(async () => {
-  const program = await compile(NodeHost, mainTsp, { noEmit: true });
-  resources = discoverResources(program).resources;
-  extensions = discoverV1Permissions(program);
-  fullSchema = expandV1Permissions(resources, extensions);
-  spicedbOutput = generateSpiceDB(fullSchema);
-  unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema);
+  pipeline = await compilePipeline();
 }, 30_000);
-
-// ─── Helpers ─────────────────────────────────────────────────────────
-
-interface DefinitionBlock {
-  name: string;
-  permissions: string[];
-  relations: string[];
-}
-
-function parseZedDefinitions(zedText: string): Map<string, DefinitionBlock> {
-  const blocks = new Map<string, DefinitionBlock>();
-  const lines = zedText.split("\n");
-  let current: DefinitionBlock | null = null;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (line.startsWith("//") || line === "") continue;
-
-    const defMatch = line.match(/^definition\s+(\S+)\s*\{/);
-    if (defMatch) {
-      current = { name: defMatch[1], permissions: [], relations: [] };
-      blocks.set(defMatch[1], current);
-      continue;
-    }
-
-    if (line === "}" || line === "{}") {
-      current = null;
-      continue;
-    }
-
-    if (!current) continue;
-
-    if (line.startsWith("permission ")) {
-      current.permissions.push(line);
-    } else if (line.startsWith("relation ")) {
-      current.relations.push(line);
-    }
-  }
-
-  return blocks;
-}
 
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
 describe("V1 permission discovery", () => {
   it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
-    expect(extensions).toHaveLength(4);
+    expect(pipeline.extensions).toHaveLength(4);
   });
 
   it("extracts correct v2Perm from each instance", () => {
-    const perms = extensions.map((e) => e.v2Perm).sort();
+    const perms = pipeline.extensions.map((e) => e.v2Perm).sort();
     expect(perms).toEqual([
       "inventory_host_update",
       "inventory_host_view",
@@ -94,20 +27,9 @@ describe("V1 permission discovery", () => {
   });
 
   it("extracts correct application names", () => {
-    const apps = new Set(extensions.map((e) => e.application));
+    const apps = new Set(pipeline.extensions.map((e) => e.application));
     expect(apps.has("inventory")).toBe(true);
     expect(apps.has("remediations")).toBe(true);
-  });
-});
-
-// ─── SpiceDB smoke ───────────────────────────────────────────────────
-
-describe("Expansion pipeline: SpiceDB output", () => {
-  it("rbac/workspace view_metadata ORs read-verb permissions", () => {
-    const defs = parseZedDefinitions(spicedbOutput);
-    const vm = defs.get("rbac/workspace")!.permissions.find((p) => p.includes("view_metadata"))!;
-    expect(vm).toContain("inventory_host_view");
-    expect(vm).toContain("remediations_remediation_view");
   });
 });
 
@@ -115,7 +37,7 @@ describe("Expansion pipeline: SpiceDB output", () => {
 
 describe("Expansion: enriched model semantics", () => {
   it("role gets bool relations for each extension's hierarchy levels", () => {
-    const role = fullSchema.find((r) => r.name === "role" && r.namespace === "rbac")!;
+    const role = pipeline.fullSchema.find((r) => r.name === "role" && r.namespace === "rbac")!;
     const boolNames = role.relations
       .filter((r) => r.body.kind === "bool")
       .map((r) => r.name);
@@ -129,7 +51,7 @@ describe("Expansion: enriched model semantics", () => {
   });
 
   it("view_metadata only accumulates read-verb extensions", () => {
-    const ws = fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
+    const ws = pipeline.fullSchema.find((r) => r.name === "workspace" && r.namespace === "rbac")!;
     const viewMeta = ws.relations.find((r) => r.name === "view_metadata")!;
 
     expect(viewMeta.body.kind).toBe("or");
@@ -150,15 +72,122 @@ describe("Expansion: enriched model semantics", () => {
 
 describe("Expansion: Unified JSON Schema", () => {
   it("V1 extensions do not add _id fields for computed permissions", () => {
-    const hostSchema = unifiedJsonSchemas["inventory/host"];
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
     expect(hostSchema).toBeDefined();
     expect(hostSchema.properties["inventory_host_view_id"]).toBeUndefined();
     expect(hostSchema.properties["inventory_host_update_id"]).toBeUndefined();
   });
 
   it("relation-derived workspace_id is still present from ExactlyOne assignable", () => {
-    const hostSchema = unifiedJsonSchemas["inventory/host"];
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
     expect(hostSchema.properties["workspace_id"]).toBeDefined();
     expect(hostSchema.required).toContain("workspace_id");
+  });
+});
+
+// ─── Annotation Discovery Tests ─────────────────────────────────────
+
+describe("Annotation discovery", () => {
+  it("discovers ResourceAnnotation instances from hbi.tsp", () => {
+    expect(pipeline.annotations.size).toBeGreaterThan(0);
+  });
+
+  it("groups annotations by resource key", () => {
+    const hostAnnotations = pipeline.annotations.get("inventory/host");
+    expect(hostAnnotations).toBeDefined();
+    expect(hostAnnotations!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("extracts feature_flag annotation with correct value", () => {
+    const hostAnnotations = pipeline.annotations.get("inventory/host")!;
+    const featureFlag = hostAnnotations.find((a) => a.key === "feature_flag");
+    expect(featureFlag).toBeDefined();
+    expect(featureFlag!.value).toBe("staleness_v2");
+  });
+
+  it("extracts retention_days annotation with correct value", () => {
+    const hostAnnotations = pipeline.annotations.get("inventory/host")!;
+    const retention = hostAnnotations.find((a) => a.key === "retention_days");
+    expect(retention).toBeDefined();
+    expect(retention!.value).toBe("90");
+  });
+
+  it("annotations do not affect SpiceDB output", () => {
+    expect(pipeline.spicedbOutput).not.toContain("feature_flag");
+    expect(pipeline.spicedbOutput).not.toContain("retention_days");
+    expect(pipeline.spicedbOutput).not.toContain("staleness_v2");
+  });
+});
+
+// ─── IR Annotation Tests ────────────────────────────────────────────
+
+describe("IR generation with annotations", () => {
+  it("includes annotations in IR output", () => {
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    expect(ir.annotations).toBeDefined();
+    expect(ir.annotations!["inventory/host"]).toBeDefined();
+  });
+
+  it("IR annotations contain correct key-value pairs", () => {
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    const hostAnnotations = ir.annotations!["inventory/host"];
+    expect(hostAnnotations["feature_flag"]).toBe("staleness_v2");
+    expect(hostAnnotations["retention_days"]).toBe("90");
+  });
+
+  it("IR version is 1.2.0", () => {
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    expect(ir.version).toBe("1.2.0");
+  });
+
+  it("IR omits annotations field when no annotations exist", () => {
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions);
+    expect(ir.annotations).toBeUndefined();
+  });
+
+  it("IR contains all expected top-level fields", () => {
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    expect(ir.generatedAt).toBeDefined();
+    expect(ir.source).toBe("test.tsp");
+    expect(ir.resources.length).toBeGreaterThan(0);
+    expect(ir.extensions.length).toBeGreaterThan(0);
+    expect(ir.spicedb).toContain("definition rbac/");
+    expect(ir.metadata).toBeDefined();
+    expect(ir.jsonSchemas).toBeDefined();
+  });
+});
+
+// ─── CascadeDeletePolicy Tests ──────────────────────────────────────
+
+describe("CascadeDeletePolicy discovery and expansion", () => {
+  it("discovers at least one CascadeDeletePolicy from hbi.tsp", () => {
+    expect(pipeline.cascadePolicies.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("discovers the host cascade delete policy with correct params", () => {
+    const hostPolicy = pipeline.cascadePolicies.find(
+      (p) => p.childApplication === "inventory" && p.childResource === "host",
+    );
+    expect(hostPolicy).toBeDefined();
+    expect(hostPolicy!.parentRelation).toBe("workspace");
+  });
+
+  it("adds a delete permission to inventory/host in SpiceDB output", () => {
+    expect(pipeline.spicedbOutput).toContain("permission delete = t_workspace->delete");
+  });
+
+  it("delete permission appears on the host resource def", () => {
+    const host = pipeline.fullSchema.find((r) => r.name === "host" && r.namespace === "inventory");
+    expect(host).toBeDefined();
+    const deletePerm = host!.relations.find((r) => r.name === "delete");
+    expect(deletePerm).toBeDefined();
+    expect(deletePerm!.body.kind).toBe("subref");
+  });
+
+  it("does not duplicate delete if called twice", () => {
+    const doubleExpanded = expandCascadeDeletePolicies(pipeline.fullSchema, pipeline.cascadePolicies);
+    const host = doubleExpanded.find((r) => r.name === "host" && r.namespace === "inventory")!;
+    const deleteCount = host.relations.filter((r) => r.name === "delete").length;
+    expect(deleteCount).toBe(1);
   });
 });

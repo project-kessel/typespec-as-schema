@@ -4,7 +4,8 @@ import {
   type V1Extension,
   type RelationBody,
 } from "../../src/lib.js";
-import { expandV1Permissions } from "../../src/expand.js";
+import { expandV1Permissions, expandCascadeDeletePolicies } from "../../src/expand.js";
+import type { CascadeDeleteEntry } from "../../src/expand.js";
 
 function makeBaseRbacResources(): ResourceDef[] {
   return [
@@ -229,5 +230,88 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
       const principals = result.filter((r) => r.name === "principal" && r.namespace === "rbac");
       expect(principals.length).toBe(1);
     });
+  });
+});
+
+describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
+  function makeHostResource(): ResourceDef[] {
+    return [
+      {
+        name: "host",
+        namespace: "inventory",
+        relations: [
+          { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
+          { name: "view", body: { kind: "subref", name: "t_workspace", subname: "inventory_host_view" } },
+        ],
+      },
+    ];
+  }
+
+  it("adds delete permission to matching child resource", () => {
+    const policies: CascadeDeleteEntry[] = [
+      { childApplication: "inventory", childResource: "host", parentRelation: "workspace" },
+    ];
+    const result = expandCascadeDeletePolicies(makeHostResource(), policies);
+    const host = result.find((r) => r.name === "host" && r.namespace === "inventory")!;
+    const deletePerm = host.relations.find((r) => r.name === "delete");
+    expect(deletePerm).toBeDefined();
+    expect(deletePerm!.body).toEqual({
+      kind: "subref",
+      name: "t_workspace",
+      subname: "delete",
+    });
+  });
+
+  it("does not modify resources when child resource is not found", () => {
+    const policies: CascadeDeleteEntry[] = [
+      { childApplication: "nonexistent", childResource: "widget", parentRelation: "workspace" },
+    ];
+    const original = makeHostResource();
+    const result = expandCascadeDeletePolicies(original, policies);
+    const host = result.find((r) => r.name === "host")!;
+    expect(host.relations.length).toBe(original[0].relations.length);
+    expect(host.relations.some((r) => r.name === "delete")).toBe(false);
+  });
+
+  it("skips if child already has a delete permission", () => {
+    const resources = makeHostResource();
+    resources[0].relations.push({
+      name: "delete",
+      body: { kind: "ref", name: "existing_delete" },
+    });
+    const policies: CascadeDeleteEntry[] = [
+      { childApplication: "inventory", childResource: "host", parentRelation: "workspace" },
+    ];
+    const result = expandCascadeDeletePolicies(resources, policies);
+    const host = result.find((r) => r.name === "host")!;
+    const deletePerms = host.relations.filter((r) => r.name === "delete");
+    expect(deletePerms.length).toBe(1);
+    expect(deletePerms[0].body.kind).toBe("ref");
+  });
+
+  it("handles empty policies array", () => {
+    const original = makeHostResource();
+    const result = expandCascadeDeletePolicies(original, []);
+    expect(result.length).toBe(original.length);
+    expect(result[0].relations.length).toBe(original[0].relations.length);
+  });
+
+  it("does not mutate the input array", () => {
+    const original = makeHostResource();
+    const originalRelCount = original[0].relations.length;
+    const policies: CascadeDeleteEntry[] = [
+      { childApplication: "inventory", childResource: "host", parentRelation: "workspace" },
+    ];
+    expandCascadeDeletePolicies(original, policies);
+    expect(original[0].relations.length).toBe(originalRelCount);
+  });
+
+  it("matches case-insensitively on application and resource", () => {
+    const policies: CascadeDeleteEntry[] = [
+      { childApplication: "INVENTORY", childResource: "HOST", parentRelation: "workspace" },
+    ];
+    const result = expandCascadeDeletePolicies(makeHostResource(), policies);
+    const host = result.find((r) => r.name === "host")!;
+    expect(host.relations.some((r) => r.name === "delete")).toBe(true);
   });
 });

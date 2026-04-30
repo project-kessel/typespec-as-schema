@@ -5,15 +5,18 @@
 
 import type { Program, Model, Type } from "@typespec/compiler";
 import { navigateProgram, isTemplateInstance } from "@typespec/compiler";
-import type { ResourceDef, RelationDef, RelationBody, V1Extension } from "./lib.js";
-import { getNamespaceFQN, isInstanceOf } from "./lib.js";
+import type { ResourceDef, RelationDef, RelationBody, V1Extension } from "./types.js";
+import { getNamespaceFQN } from "./utils.js";
+import { isInstanceOf, findExtensionTemplate } from "./discover.js";
 
 // ─── Discovery ──────────────────────────────────────────────────────
 
+function hasStringValue(t: Type): t is Type & { value: string } {
+  return "value" in t && typeof (t as unknown as Record<string, unknown>).value === "string";
+}
+
 function getStringValue(t: Type): string | undefined {
-  if ("value" in t && typeof (t as any).value === "string") {
-    return (t as any).value;
-  }
+  if (hasStringValue(t)) return t.value;
   if (t.kind === "Scalar" && t.name) return t.name;
   return undefined;
 }
@@ -28,22 +31,6 @@ function extractParams(model: Model, names: string[]): Record<string, string> {
     }
   }
   return params;
-}
-
-/** Find an extension template by name in the Kessel namespace. */
-export function findExtensionTemplate(program: Program, templateName: string): Model | null {
-  const globalNs = program.getGlobalNamespaceType();
-  function search(ns: any): Model | null {
-    for (const [, model] of ns.models) {
-      if (model.name === templateName) return model;
-    }
-    for (const [, childNs] of ns.namespaces) {
-      const found = search(childNs);
-      if (found) return found;
-    }
-    return null;
-  }
-  return search(globalNs);
 }
 
 function discoverInstances(
@@ -82,8 +69,9 @@ function discoverInstances(
         const aliasType = program.checker.getTypeForNode(statement);
         if (!aliasType || aliasType.kind !== "Model") continue;
         addUnique(aliasType as Model);
-      } catch {
-        // skip unresolvable statements
+      } catch (_e) {
+        // Expected for non-extension alias statements that the checker cannot resolve.
+        // These are not errors -- alias resolution is best-effort during extension discovery.
       }
     }
   }
@@ -95,8 +83,58 @@ export function discoverV1Permissions(program: Program): V1Extension[] {
   return discoverInstances(program, "V1WorkspacePermission", [
     "application", "resource", "verb", "v2Perm",
   ]).filter(
-    (p) => p.application && p.resource && p.verb && p.v2Perm,
-  ) as V1Extension[];
+    (p): p is Record<string, string> & V1Extension =>
+      !!(p.application && p.resource && p.verb && p.v2Perm),
+  );
+}
+
+// ─── Annotation Discovery ──────────────────────────────────────────
+
+export interface AnnotationEntry {
+  key: string;
+  value: string;
+}
+
+/**
+ * Discovers ResourceAnnotation template instances from the compiled program.
+ * Returns annotations grouped by resource key (e.g., "inventory/host").
+ */
+export function discoverAnnotations(
+  program: Program,
+): Map<string, AnnotationEntry[]> {
+  const raw = discoverInstances(program, "ResourceAnnotation", [
+    "application", "resource", "key", "value",
+  ]);
+
+  const annotations = new Map<string, AnnotationEntry[]>();
+  for (const params of raw) {
+    if (!params.application || !params.resource || !params.key) continue;
+    const resourceKey = `${params.application}/${params.resource}`;
+    let list = annotations.get(resourceKey);
+    if (!list) {
+      list = [];
+      annotations.set(resourceKey, list);
+    }
+    list.push({ key: params.key, value: params.value ?? "" });
+  }
+  return annotations;
+}
+
+// ─── CascadeDeletePolicy Discovery ──────────────────────────────────
+
+export interface CascadeDeleteEntry {
+  childApplication: string;
+  childResource: string;
+  parentRelation: string;
+}
+
+export function discoverCascadeDeletePolicies(program: Program): CascadeDeleteEntry[] {
+  return discoverInstances(program, "CascadeDeletePolicy", [
+    "childApplication", "childResource", "parentRelation",
+  ]).filter(
+    (p): p is Record<string, string> & CascadeDeleteEntry =>
+      !!(p.childApplication && p.childResource && p.parentRelation),
+  );
 }
 
 // ─── Expansion ──────────────────────────────────────────────────────
@@ -214,4 +252,36 @@ export function expandV1Permissions(
   }
 
   return resources;
+}
+
+/**
+ * Expands CascadeDeletePolicy declarations into SpiceDB permissions.
+ * For each policy, adds a "delete" permission on the child resource that
+ * resolves through the parent relation's delete permission.
+ */
+export function expandCascadeDeletePolicies(
+  resources: ResourceDef[],
+  policies: CascadeDeleteEntry[],
+): ResourceDef[] {
+  const result = resources.map((r) => ({
+    ...r,
+    relations: [...r.relations],
+  }));
+
+  for (const policy of policies) {
+    const nsPrefix = policy.childApplication.toLowerCase();
+    const childName = policy.childResource.toLowerCase();
+    const child = result.find((r) => r.name === childName && r.namespace === nsPrefix);
+    if (!child) continue;
+
+    const alreadyHasDelete = child.relations.some((r) => r.name === "delete");
+    if (alreadyHasDelete) continue;
+
+    addRelation(child, {
+      name: "delete",
+      body: { kind: "subref", name: `t_${policy.parentRelation}`, subname: "delete" },
+    });
+  }
+
+  return result;
 }

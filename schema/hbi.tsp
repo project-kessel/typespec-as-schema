@@ -32,6 +32,35 @@ alias updatePermission = Kessel.V1WorkspacePermission<
   "inventory_host_update"
 >;
 
+// ─── Cascade Delete Policy ──────────────────────────────────────────
+// When a workspace is deleted, hosts within it should be deletable.
+
+alias hostCascadeDelete = Kessel.CascadeDeletePolicy<
+  "inventory",
+  "host",
+  "workspace"
+>;
+
+// ─── Resource Annotations (→ IR metadata only) ─────────────────────
+// These do not affect SpiceDB schema — they attach service-specific
+// metadata to resources for consumption by downstream systems.
+
+/** Feature flag governing staleness detection version */
+alias hostStalenessFeature = Kessel.ResourceAnnotation<
+  "inventory",
+  "host",
+  "feature_flag",
+  "staleness_v2"
+>;
+
+/** Data retention policy in days */
+alias hostRetention = Kessel.ResourceAnnotation<
+  "inventory",
+  "host",
+  "retention_days",
+  "90"
+>;
+
 // ─── Host Data Schema (→ JSONSchema) ─────────────────────────────────
 // Native TypeSpec types with validation decorators.
 // The @jsonSchema decorator makes this emit as JSONSchema.

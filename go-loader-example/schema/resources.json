@@ -1,7 +1,7 @@
 {
-  "version": "1.1.0",
-  "generatedAt": "2026-04-14T15:28:30.852Z",
-  "source": "/Users/akoserwa/schema-unify/poc/typespec-as-schema/schema/main.tsp",
+  "version": "1.2.0",
+  "generatedAt": "2026-04-30T12:15:16.719Z",
+  "source": "/Users/akoserwa/new-schema-unify/v2/typespec-as-schema/schema/main.tsp",
   "resources": [
     {
       "name": "principal",
@@ -343,8 +343,7 @@
                 "subname": "inventory_host_view"
               }
             ]
-          },
-          "isPublic": true
+          }
         },
         {
           "name": "inventory_host_update",
@@ -362,8 +361,7 @@
                 "subname": "inventory_host_update"
               }
             ]
-          },
-          "isPublic": true
+          }
         },
         {
           "name": "remediations_remediation_view",
@@ -381,8 +379,7 @@
                 "subname": "remediations_remediation_view"
               }
             ]
-          },
-          "isPublic": true
+          }
         },
         {
           "name": "remediations_remediation_update",
@@ -400,8 +397,7 @@
                 "subname": "remediations_remediation_update"
               }
             ]
-          },
-          "isPublic": true
+          }
         },
         {
           "name": "view_metadata",
@@ -417,8 +413,7 @@
                 "name": "remediations_remediation_view"
               }
             ]
-          },
-          "isPublic": true
+          }
         }
       ]
     },
@@ -448,6 +443,14 @@
             "kind": "subref",
             "name": "t_workspace",
             "subname": "inventory_host_update"
+          }
+        },
+        {
+          "name": "delete",
+          "body": {
+            "kind": "subref",
+            "name": "t_workspace",
+            "subname": "delete"
           }
         }
       ]
@@ -479,7 +482,7 @@
       "v2Perm": "remediations_remediation_update"
     }
   ],
-  "spicedb": "definition rbac/principal {\n}\n\ndefinition rbac/role {\n    permission any_any_any = t_any_any_any\n    permission inventory_any_any = t_inventory_any_any\n    permission inventory_hosts_any = t_inventory_hosts_any\n    permission inventory_any_read = t_inventory_any_read\n    permission inventory_hosts_read = t_inventory_hosts_read\n    permission inventory_any_write = t_inventory_any_write\n    permission inventory_hosts_write = t_inventory_hosts_write\n    permission remediations_any_any = t_remediations_any_any\n    permission remediations_remediations_any = t_remediations_remediations_any\n    permission remediations_any_read = t_remediations_any_read\n    permission remediations_remediations_read = t_remediations_remediations_read\n    permission remediations_any_write = t_remediations_any_write\n    permission remediations_remediations_write = t_remediations_remediations_write\n    permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read\n    permission inventory_host_update = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_write + inventory_hosts_write\n    permission remediations_remediation_view = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_read + remediations_remediations_read\n    permission remediations_remediation_update = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_write + remediations_remediations_write\n\n    relation t_any_any_any: rbac/principal:*\n    relation t_inventory_any_any: rbac/principal:*\n    relation t_inventory_hosts_any: rbac/principal:*\n    relation t_inventory_any_read: rbac/principal:*\n    relation t_inventory_hosts_read: rbac/principal:*\n    relation t_inventory_any_write: rbac/principal:*\n    relation t_inventory_hosts_write: rbac/principal:*\n    relation t_remediations_any_any: rbac/principal:*\n    relation t_remediations_remediations_any: rbac/principal:*\n    relation t_remediations_any_read: rbac/principal:*\n    relation t_remediations_remediations_read: rbac/principal:*\n    relation t_remediations_any_write: rbac/principal:*\n    relation t_remediations_remediations_write: rbac/principal:*\n}\n\ndefinition rbac/role_binding {\n    permission subject = t_subject\n    permission granted = t_granted\n    permission inventory_host_view = (subject & t_granted->inventory_host_view)\n    permission inventory_host_update = (subject & t_granted->inventory_host_update)\n    permission remediations_remediation_view = (subject & t_granted->remediations_remediation_view)\n    permission remediations_remediation_update = (subject & t_granted->remediations_remediation_update)\n\n    relation t_subject: rbac/principal\n    relation t_granted: rbac/role\n}\n\ndefinition rbac/workspace {\n    permission parent = t_parent\n    permission binding = t_binding\n    permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view\n    permission inventory_host_update = t_binding->inventory_host_update + t_parent->inventory_host_update\n    permission remediations_remediation_view = t_binding->remediations_remediation_view + t_parent->remediations_remediation_view\n    permission remediations_remediation_update = t_binding->remediations_remediation_update + t_parent->remediations_remediation_update\n    permission view_metadata = inventory_host_view + remediations_remediation_view\n\n    relation t_parent: rbac/workspace\n    relation t_binding: rbac/role_binding\n}\n\ndefinition inventory/host {\n    permission workspace = t_workspace\n    permission view = t_workspace->inventory_host_view\n    permission update = t_workspace->inventory_host_update\n\n    relation t_workspace: rbac/workspace\n}\n",
+  "spicedb": "definition rbac/principal {\n}\n\ndefinition rbac/role {\n    permission any_any_any = t_any_any_any\n    permission inventory_any_any = t_inventory_any_any\n    permission inventory_hosts_any = t_inventory_hosts_any\n    permission inventory_any_read = t_inventory_any_read\n    permission inventory_hosts_read = t_inventory_hosts_read\n    permission inventory_any_write = t_inventory_any_write\n    permission inventory_hosts_write = t_inventory_hosts_write\n    permission remediations_any_any = t_remediations_any_any\n    permission remediations_remediations_any = t_remediations_remediations_any\n    permission remediations_any_read = t_remediations_any_read\n    permission remediations_remediations_read = t_remediations_remediations_read\n    permission remediations_any_write = t_remediations_any_write\n    permission remediations_remediations_write = t_remediations_remediations_write\n    permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read\n    permission inventory_host_update = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_write + inventory_hosts_write\n    permission remediations_remediation_view = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_read + remediations_remediations_read\n    permission remediations_remediation_update = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_write + remediations_remediations_write\n\n    relation t_any_any_any: rbac/principal:*\n    relation t_inventory_any_any: rbac/principal:*\n    relation t_inventory_hosts_any: rbac/principal:*\n    relation t_inventory_any_read: rbac/principal:*\n    relation t_inventory_hosts_read: rbac/principal:*\n    relation t_inventory_any_write: rbac/principal:*\n    relation t_inventory_hosts_write: rbac/principal:*\n    relation t_remediations_any_any: rbac/principal:*\n    relation t_remediations_remediations_any: rbac/principal:*\n    relation t_remediations_any_read: rbac/principal:*\n    relation t_remediations_remediations_read: rbac/principal:*\n    relation t_remediations_any_write: rbac/principal:*\n    relation t_remediations_remediations_write: rbac/principal:*\n}\n\ndefinition rbac/role_binding {\n    permission subject = t_subject\n    permission granted = t_granted\n    permission inventory_host_view = (subject & t_granted->inventory_host_view)\n    permission inventory_host_update = (subject & t_granted->inventory_host_update)\n    permission remediations_remediation_view = (subject & t_granted->remediations_remediation_view)\n    permission remediations_remediation_update = (subject & t_granted->remediations_remediation_update)\n\n    relation t_subject: rbac/principal\n    relation t_granted: rbac/role\n}\n\ndefinition rbac/workspace {\n    permission parent = t_parent\n    permission binding = t_binding\n    permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view\n    permission inventory_host_update = t_binding->inventory_host_update + t_parent->inventory_host_update\n    permission remediations_remediation_view = t_binding->remediations_remediation_view + t_parent->remediations_remediation_view\n    permission remediations_remediation_update = t_binding->remediations_remediation_update + t_parent->remediations_remediation_update\n    permission view_metadata = inventory_host_view + remediations_remediation_view\n\n    relation t_parent: rbac/workspace\n    relation t_binding: rbac/role_binding\n}\n\ndefinition inventory/host {\n    permission workspace = t_workspace\n    permission view = t_workspace->inventory_host_view\n    permission update = t_workspace->inventory_host_update\n    permission delete = t_workspace->delete\n\n    relation t_workspace: rbac/workspace\n}\n",
   "metadata": {
     "inventory": {
       "permissions": [
@@ -508,23 +511,17 @@
           "type": "string",
           "format": "uuid",
           "source": "relation workspace: rbac/workspace [ExactlyOne]"
-        },
-        "inventory_host_view_id": {
-          "type": "string",
-          "source": "extension-declared",
-          "format": "uuid"
-        },
-        "inventory_host_update_id": {
-          "type": "string",
-          "source": "extension-declared",
-          "format": "uuid"
         }
       },
       "required": [
-        "workspace_id",
-        "inventory_host_view_id",
-        "inventory_host_update_id"
+        "workspace_id"
       ]
+    }
+  },
+  "annotations": {
+    "inventory/host": {
+      "feature_flag": "staleness_v2",
+      "retention_days": "90"
     }
   }
 }
