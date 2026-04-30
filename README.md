@@ -7,38 +7,51 @@ Prototype exploring [TypeSpec](https://typespec.io/) as a unified schema represe
 Service teams write `.tsp` files declaring resources and permissions. A TypeScript emitter compiles them into SpiceDB schemas, metadata, and JSON Schema -- no manual wiring needed.
 
 ```
- .tsp files                     src/ (9 modules)                      Outputs
-┌──────────────┐
-│ lib/         │         ┌──────────────────────┐
-│  kessel.tsp  │         │  COMPILE             │
-│  kessel-     │────┐    │  TypeSpec compiler    │
-│  extensions  │    │    │  parses .tsp into     │
-│  .tsp        │    │    │  a typed Program      │
-├──────────────┤    │    └──────────┬───────────┘
-│ schema/      │    │              │
-│  main.tsp    │────┤    ┌─────────┴───────────┐
-│  rbac.tsp    │    │    │  DISCOVER            │        ┌────────────────┐
-│  hbi.tsp     │────┤    │  Walk the Program:   │        │ SpiceDB .zed   │
-│  remediations│    │    │  • resources         │        │ (default)      │
-│  .tsp        │────┘    │    (discover.ts)     │        ├────────────────┤
-└──────────────┘         │  • V1 perms          │        │ Metadata JSON  │
-                         │  • annotations       │        │ (--metadata)   │
-                         │  • cascade policies  │        ├────────────────┤
-                         │    (expand.ts)       │        │ JSON Schema    │
-                         └─────────┬───────────┘        │ (--unified-    │
-                                   │                     │  jsonschema)   │
-                         ┌─────────┴───────────┐        ├────────────────┤
-                         │  EXPAND             │        │ IR JSON        │
-                         │  For each V1 perm:  │        │ (--ir)         │
-                         │  • Role: 4 bool +   │        ├────────────────┤
-                         │    1 union perm      │        │ Preview        │
-                         │  • RoleBinding:      │        │ (--preview)    │
-                         │    1 intersect perm  │        └───────▲────────┘
-                         │  • Workspace:        │                │
-                         │    1 union perm      │        ┌───────┴────────┐
-                         │  + view_metadata     │        │  GENERATE      │
-                         │    (all read perms)  │───────▶│  (generate.ts) │
-                         └─────────────────────┘        └────────────────┘
+ .tsp files                     src/ (9 modules, 1323 lines)
+
+┌──────────────┐         ┌──────────────────────┐
+│ lib/         │         │  1. COMPILE           │
+│  kessel.tsp  │         │  TypeSpec compiler    │
+│  kessel-     │────┐    │  parses .tsp into     │
+│  extensions  │    │    │  a typed Program      │
+│  .tsp        │    │    └──────────┬───────────┘
+├──────────────┤    │               │
+│ schema/      │    │    ┌──────────┴───────────┐
+│  main.tsp    │────┤    │  2. DISCOVER          │
+│  rbac.tsp    │    │    │  Walk the Program:    │
+│  hbi.tsp     │────┤    │  • resources          │
+│  remediations│    │    │    (discover.ts)      │
+│  .tsp        │────┘    │  • V1 perms           │
+└──────────────┘         │  • annotations        │
+                         │  • cascade policies   │
+                         │    (expand.ts)        │
+                         └──────────┬───────────┘
+                                    │
+                         ┌──────────┴───────────┐
+                         │  3. EXPAND            │         Outputs
+                         │  (expand.ts)          │
+                         │  For each V1 perm:    │  ┌────────────────────┐
+                         │  • Role: 4 bool +     │  │ SpiceDB .zed       │
+                         │    1 union perm        │  │ (default)          │
+                         │  • RoleBinding:        │  ├────────────────────┤
+                         │    1 intersect perm    │  │ Metadata JSON      │
+                         │  • Workspace:          │  │ (--metadata)       │
+                         │    1 union perm        │  ├────────────────────┤
+                         │  + view_metadata       │  │ Unified JSON Schema│
+                         │  + cascade delete      │  │ (--unified-        │
+                         └──────────┬───────────┘  │  jsonschema)        │
+                                    │              ├────────────────────┤
+                         ┌──────────┴───────────┐  │ IR JSON            │
+                         │  4. VALIDATE          │  │ (--ir)             │
+                         │  (safety.ts)          │  ├────────────────────┤
+                         │  • complexity budget   │  │ Preview            │
+                         │  • expression refs     │  │ (--preview <perm>) │
+                         │  • output size         │  └─────────▲─────────┘
+                         └──────────┬───────────┘             │
+                                    │              ┌──────────┴──────────┐
+                                    └─────────────▶│  5. GENERATE + EMIT │
+                                                   │  (generate.ts)      │
+                                                   └─────────────────────┘
 ```
 
 ## Quick Start
@@ -84,29 +97,31 @@ Then add one import to `schema/main.tsp`. Done. No TypeScript changes needed.
 ```mermaid
 flowchart TB
   subgraph input ["Input (.tsp files)"]
-    lib["lib/kessel.tsp\nlib/kessel-extensions.tsp"]
-    schema["schema/main.tsp\nschema/rbac.tsp\nschema/hbi.tsp\nschema/remediations.tsp"]
+    lib["lib/\nkessel.tsp\nkessel-extensions.tsp"]
+    schema["schema/\nmain.tsp, rbac.tsp\nhbi.tsp, remediations.tsp"]
   end
 
-  subgraph pipeline ["Pipeline (src/)"]
-    compile["1. Compile\nTypeSpec → Program"]
-    discover["2. Discover\nresources + V1 perms\n+ annotations + cascade"]
-    expand["3. Expand\n7 mutations per V1 perm\n+ cascade delete"]
-    validate["4. Validate\nsafety guards"]
-    generate["5. Generate + Emit"]
+  subgraph pipeline ["Pipeline (src/, 9 modules)"]
+    compile["1. Compile\n@typespec/compiler\n.tsp → typed Program"]
+    discover["2. Discover\ndiscover.ts: resources\nexpand.ts: V1 perms,\nannotations, cascade policies"]
+    budget["validateComplexityBudget"]
+    expand["3. Expand\nexpandV1Permissions: 7 mutations/perm\nexpandCascadeDeletePolicies"]
+    validate["4. Validate\nvalidatePermissionExpressions\nvalidateOutputSize"]
+    generate["5. Generate + Emit\ngenerate.ts"]
   end
 
-  subgraph outputs ["Outputs"]
-    spicedb["SpiceDB .zed"]
-    meta["Metadata JSON"]
-    jsonschema["Unified JSON Schema"]
-    ir["IR JSON"]
-    preview["Preview (--preview)"]
+  subgraph outputs ["Outputs (one per invocation)"]
+    spicedb["SpiceDB .zed\n(default)"]
+    meta["Metadata JSON\n(--metadata)"]
+    jsonschema["Unified JSON Schema\n(--unified-jsonschema)"]
+    ir["IR JSON\n(--ir)"]
+    preview["Preview\n(--preview perm)"]
   end
 
   lib --> compile
   schema --> compile
-  compile --> discover --> expand --> validate --> generate
+  compile --> discover
+  discover --> budget --> expand --> validate --> generate
   generate --> spicedb
   generate --> meta
   generate --> jsonschema
@@ -159,8 +174,18 @@ test/                            153 tests
   integration/                     Full pipeline + golden output comparison
 ```
 
+## Output Formats
+
+| Output | Flag | Format | Audience | Scope |
+|---|---|---|---|---|
+| SpiceDB | *(default)* | Zed DSL | Authorization engine | Full authz schema |
+| Metadata | `--metadata` | JSON | Platform tooling | Per-service permission/resource lists |
+| Unified JSON Schema | `--unified-jsonschema` | JSON Schema | API servers/clients | Per-resource payload contracts |
+| IR | `--ir [path]` | JSON | Go binaries, CI | All of the above + raw type graph + annotations |
+| Preview | `--preview <perm>` | Human text | Service developers | Single extension mutation trace |
+
 ## Risks and Tradeoffs
 
-- **Node.js in CI** for `tsp` + `tsx`; Go consumer runtime needs no Node
+- **Node.js in CI** for `tsp` + `tsx`; Go loader example (`go-loader-example/`) needs no Node at runtime
 - **New extension types** require adding logic to `src/expand.ts`
 - **Two JSON Schema paths** — built-in `@jsonSchema` emit vs unified schema
