@@ -2,6 +2,7 @@
 
 export { IR_VERSION } from "./types.js";
 export type {
+  KesselVerb,
   RelationDef,
   RelationBody,
   ResourceDef,
@@ -36,7 +37,7 @@ export {
   discoverCascadeDeletePolicies,
   VALID_VERBS,
 } from "./discover.js";
-export type { DiscoveryWarnings } from "./discover.js";
+export type { DiscoveryWarnings, DiscoveryStats } from "./discover.js";
 
 export {
   expandV1Permissions,

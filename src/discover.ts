@@ -12,7 +12,7 @@ import {
   type Namespace,
   type Type,
 } from "@typespec/compiler";
-import type { RelationDef, ResourceDef, V1Extension, CascadeDeleteEntry, AnnotationEntry } from "./types.js";
+import type { RelationDef, ResourceDef, V1Extension, KesselVerb, CascadeDeleteEntry, AnnotationEntry } from "./types.js";
 import { getNamespaceFQN, camelToSnake } from "./utils.js";
 import { parsePermissionExpr } from "./parser.js";
 import { EXTENSION_TEMPLATES, type ExtensionTemplateDef } from "./registry.js";
@@ -119,6 +119,8 @@ export function isInstanceOf(model: Model, template: Model): boolean {
 interface DiscoverInstancesResult {
   results: Record<string, string>[];
   skipped: string[];
+  aliasesAttempted: number;
+  aliasesResolved: number;
 }
 
 function discoverInstances(
@@ -127,7 +129,7 @@ function discoverInstances(
 ): DiscoverInstancesResult {
   const { templateName, paramNames, namespace } = def;
   const template = findExtensionTemplate(program, templateName, namespace);
-  if (!template) return { results: [], skipped: [] };
+  if (!template) return { results: [], skipped: [], aliasesAttempted: 0, aliasesResolved: 0 };
 
   const results: Record<string, string>[] = [];
   const seen = new Set<string>();
@@ -151,12 +153,17 @@ function discoverInstances(
     },
   });
 
+  let aliasesAttempted = 0;
+  let aliasesResolved = 0;
+
   for (const [, sourceFile] of program.sourceFiles) {
     for (const statement of sourceFile.statements) {
       if (!("value" in statement && "id" in statement)) continue;
+      aliasesAttempted++;
       try {
         const aliasType = program.checker.getTypeForNode(statement);
         if (!aliasType || aliasType.kind !== "Model") continue;
+        aliasesResolved++;
         addUnique(aliasType as Model);
       } catch (e: unknown) {
         // Best-effort: swallow TypeSpec compiler resolution errors (e.g. "cannot resolve",
@@ -172,7 +179,7 @@ function discoverInstances(
     }
   }
 
-  return { results, skipped };
+  return { results, skipped, aliasesAttempted, aliasesResolved };
 }
 
 function getTemplate(name: string): ExtensionTemplateDef {
@@ -181,21 +188,44 @@ function getTemplate(name: string): ExtensionTemplateDef {
   return def;
 }
 
-export const VALID_VERBS = new Set(["read", "write", "create", "delete"]);
+export const VALID_VERBS = new Set<KesselVerb>(["read", "write", "create", "delete"]);
+
+function isKesselVerb(v: string): v is KesselVerb {
+  return VALID_VERBS.has(v as KesselVerb);
+}
+
+export interface DiscoveryStats {
+  aliasesAttempted: number;
+  aliasesResolved: number;
+  resourcesFound: number;
+  extensionsFound: number;
+}
 
 export interface DiscoveryWarnings {
   skipped: string[];
+  stats: DiscoveryStats;
 }
 
 export function discoverV1Permissions(program: Program, warnings?: DiscoveryWarnings): V1Extension[] {
   const def = getTemplate("V1WorkspacePermission");
-  const { results, skipped } = discoverInstances(program, def);
-  if (warnings) warnings.skipped.push(...skipped);
-  return results.filter(
-    (p): p is Record<string, string> & V1Extension =>
-      !!(p.application && p.resource && p.verb && p.v2Perm) &&
-      VALID_VERBS.has(p.verb),
-  );
+  const { results, skipped, aliasesAttempted, aliasesResolved } = discoverInstances(program, def);
+  if (warnings) {
+    warnings.skipped.push(...skipped);
+    warnings.stats.aliasesAttempted += aliasesAttempted;
+    warnings.stats.aliasesResolved += aliasesResolved;
+  }
+  const extensions = results
+    .filter(
+      (p) => !!(p.application && p.resource && p.verb && p.v2Perm) && isKesselVerb(p.verb),
+    )
+    .map((p) => ({
+      application: p.application,
+      resource: p.resource,
+      verb: p.verb as KesselVerb,
+      v2Perm: p.v2Perm,
+    }));
+  if (warnings) warnings.stats.extensionsFound += extensions.length;
+  return extensions;
 }
 
 export function discoverAnnotations(
@@ -203,8 +233,12 @@ export function discoverAnnotations(
   warnings?: DiscoveryWarnings,
 ): Map<string, AnnotationEntry[]> {
   const def = getTemplate("ResourceAnnotation");
-  const { results: raw, skipped } = discoverInstances(program, def);
-  if (warnings) warnings.skipped.push(...skipped);
+  const { results: raw, skipped, aliasesAttempted, aliasesResolved } = discoverInstances(program, def);
+  if (warnings) {
+    warnings.skipped.push(...skipped);
+    warnings.stats.aliasesAttempted += aliasesAttempted;
+    warnings.stats.aliasesResolved += aliasesResolved;
+  }
 
   const annotations = new Map<string, AnnotationEntry[]>();
   for (const params of raw) {
@@ -225,8 +259,12 @@ export function discoverCascadeDeletePolicies(
   warnings?: DiscoveryWarnings,
 ): CascadeDeleteEntry[] {
   const def = getTemplate("CascadeDeletePolicy");
-  const { results, skipped } = discoverInstances(program, def);
-  if (warnings) warnings.skipped.push(...skipped);
+  const { results, skipped, aliasesAttempted, aliasesResolved } = discoverInstances(program, def);
+  if (warnings) {
+    warnings.skipped.push(...skipped);
+    warnings.stats.aliasesAttempted += aliasesAttempted;
+    warnings.stats.aliasesResolved += aliasesResolved;
+  }
   return results.filter(
     (p): p is Record<string, string> & CascadeDeleteEntry =>
       !!(p.childApplication && p.childResource && p.parentRelation),

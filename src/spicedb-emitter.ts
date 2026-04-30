@@ -2,7 +2,7 @@
 // Single entry point: compiles TypeSpec, discovers resources and permissions,
 // validates safety constraints, expands V1 permissions, and emits the requested output format.
 //
-// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--unified-jsonschema] [--preview <v2perm>] [--annotations] [--no-strict]
+// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--unified-jsonschema] [--preview <v2perm>] [--annotations] [--no-strict] [--emit-jsonschema] [--watch]
 
 import * as fs from "fs";
 import * as path from "path";
@@ -17,15 +17,12 @@ import { compilePipeline } from "./pipeline.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-async function main() {
-  const args = process.argv.slice(2);
-  const mainFile = args.find((a) => !a.startsWith("--")) ||
-    path.resolve(__dirname, "../schema/main.tsp");
-  const resolvedMain = path.resolve(mainFile);
+async function runOnce(args: string[], resolvedMain: string): Promise<void> {
+  const emitJsonSchema = args.includes("--emit-jsonschema");
 
   console.error(`Compiling ${resolvedMain}...`);
 
-  const result = await compilePipeline(resolvedMain);
+  const result = await compilePipeline(resolvedMain, { emitJsonSchema });
   const {
     extensions: permissions,
     annotations,
@@ -55,7 +52,6 @@ async function main() {
     `Discovered ${resources.length} resources, ${permissions.length} V1 extensions, expanded to ${fullSchema.length} resource defs.`,
   );
 
-  // Generate and emit
   if (args.includes("--preview")) {
     const previewIdx = args.indexOf("--preview");
     const targetPerm = args[previewIdx + 1];
@@ -147,6 +143,50 @@ async function main() {
     console.log("// Produced by walking the compiled TypeSpec program.");
     console.log("");
     console.log(result.spicedbOutput);
+  }
+}
+
+function startWatch(args: string[], resolvedMain: string): void {
+  const projectRoot = path.dirname(resolvedMain);
+  const watchDirs = [
+    path.resolve(projectRoot, "../lib"),
+    projectRoot,
+  ].filter((d) => fs.existsSync(d));
+
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const DEBOUNCE_MS = 300;
+
+  function onFileChange(eventType: string, filename: string | null): void {
+    if (filename && !filename.endsWith(".tsp")) return;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      const ts = new Date().toLocaleTimeString();
+      console.error(`\n[${ts}] File change detected${filename ? `: ${filename}` : ""}, recompiling...`);
+      try {
+        await runOnce(args, resolvedMain);
+        console.error(`[${new Date().toLocaleTimeString()}] Done.`);
+      } catch (err) {
+        console.error(`[${new Date().toLocaleTimeString()}] Error:`, err instanceof Error ? err.message : err);
+      }
+    }, DEBOUNCE_MS);
+  }
+
+  for (const dir of watchDirs) {
+    fs.watch(dir, { recursive: true }, onFileChange);
+    console.error(`Watching ${dir} for .tsp changes...`);
+  }
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const mainFile = args.find((a) => !a.startsWith("--")) ||
+    path.resolve(__dirname, "../schema/main.tsp");
+  const resolvedMain = path.resolve(mainFile);
+
+  await runOnce(args, resolvedMain);
+
+  if (args.includes("--watch")) {
+    startWatch(args, resolvedMain);
   }
 }
 

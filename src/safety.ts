@@ -134,7 +134,80 @@ export function validateOutputSize(
   return { sizeBytes, warning };
 }
 
-// ─── Permission expression validation ───────────────────────────────
+// ─── Pre-expansion permission expression validation ─────────────────
+
+/**
+ * Validates permission expressions before expansion runs. Checks that
+ * subrefs (e.g., "workspace.inventory_host_view") have a valid left-hand
+ * side — the local assignable relation must exist on the same resource.
+ * Right-hand side validation is deferred to post-expansion because RBAC
+ * mutations haven't been applied yet.
+ */
+export function validatePreExpansionExpressions(
+  resources: ResourceDef[],
+): ValidationDiagnostic[] {
+  const diagnostics: ValidationDiagnostic[] = [];
+
+  for (const res of resources) {
+    const resourceKey = `${res.namespace}/${res.name}`;
+    const localNames = new Set<string>();
+    for (const rel of res.relations) {
+      localNames.add(rel.name);
+      localNames.add(slotName(rel.name));
+    }
+
+    for (const rel of res.relations) {
+      validatePreExpansionBody(rel.body, resourceKey, rel.name, localNames, diagnostics);
+    }
+  }
+
+  return diagnostics;
+}
+
+function validatePreExpansionBody(
+  body: import("./types.js").RelationBody,
+  resourceKey: string,
+  relationName: string,
+  localNames: Set<string>,
+  diagnostics: ValidationDiagnostic[],
+): void {
+  switch (body.kind) {
+    case "ref":
+      if (!localNames.has(body.name) && !localNames.has(slotName(body.name))) {
+        diagnostics.push({
+          resource: resourceKey,
+          relation: relationName,
+          expression: body.name,
+          message: `Unknown reference "${body.name}" in ${resourceKey}.${relationName} (pre-expansion)`,
+        });
+      }
+      break;
+
+    case "subref":
+      if (!localNames.has(body.name)) {
+        diagnostics.push({
+          resource: resourceKey,
+          relation: relationName,
+          expression: `${body.name}->${body.subname}`,
+          message: `Unknown relation "${body.name}" in ${resourceKey}.${relationName} (pre-expansion)`,
+        });
+      }
+      break;
+
+    case "or":
+    case "and":
+      for (const member of body.members) {
+        validatePreExpansionBody(member, resourceKey, relationName, localNames, diagnostics);
+      }
+      break;
+
+    case "assignable":
+    case "bool":
+      break;
+  }
+}
+
+// ─── Post-expansion permission expression validation ────────────────
 
 export interface ValidationDiagnostic {
   resource: string;

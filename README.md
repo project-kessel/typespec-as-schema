@@ -139,11 +139,14 @@ flowchart TB
 
 This project does **not** use custom TypeSpec decorators or a registered TypeSpec emitter plugin (`$onEmit`). Instead:
 
-- **Built-in decorators only** — `@doc`, `@format`, `@pattern`, `@jsonSchema` from the standard library are used in `schema/hbi.tsp` for data validation. These drive the built-in `@typespec/json-schema` emitter that writes `tsp-output/`.
+- **Built-in decorators only** — `@doc`, `@format`, `@pattern`, `@jsonSchema` from the standard library are used in `schema/hbi.tsp` for data validation. These drive the built-in `@typespec/json-schema` emitter that writes `tsp-output/`. The `--emit-jsonschema` flag runs the JSON Schema emitter in the same compilation pass so a separate `tsp compile` invocation is no longer needed.
 - **Model templates as data carriers** — `V1WorkspacePermission`, `CascadeDeletePolicy`, and `ResourceAnnotation` in `lib/kessel-extensions.tsp` are plain TypeSpec `model` definitions with type parameters. They carry parameters but have zero compile-time behavior. The comment in `kessel-extensions.tsp` says: *"Templates carry parameters only; expansion logic lives in src/expand.ts."*
-- **Standalone CLI** — `spicedb-emitter.ts` calls `compile()` from `@typespec/compiler` to get a `Program` object, then walks it with custom TypeScript functions (`discoverResources`, `discoverV1Permissions`, etc.). It is not registered as a TypeSpec emitter plugin — it is a standalone script that uses the compiler as a library.
+- **Standalone CLI** — `spicedb-emitter.ts` calls `compile()` from `@typespec/compiler` to get a `Program` object, then walks it with custom TypeScript functions (`discoverResources`, `discoverV1Permissions`, etc.). It is not registered as a TypeSpec emitter plugin — it is a standalone script that uses the compiler as a library. A `--watch` flag re-runs the pipeline on `.tsp` file changes without needing TypeSpec's plugin watch infrastructure.
+- **Type-safe verb narrowing** — `V1Extension.verb` is typed as `KesselVerb` (`"read" | "write" | "create" | "delete"`) rather than `string`, enforcing valid verbs at the TypeScript type level. A runtime `VALID_VERBS` set is kept for alias discovery where the type system can't reach.
+- **Two-pass expression validation** — Permission expressions (`Permission<"expr">`) are validated both pre-expansion (catches typos in service-authored schemas before RBAC mutations) and post-expansion (catches cross-resource reference errors in the fully expanded schema).
+- **Discovery health tracking** — Alias resolution stats (`aliasesAttempted`, `aliasesResolved`, `resourcesFound`, `extensionsFound`) are tracked during discovery and surfaced as warnings when aliases are skipped, making silent regressions in the name-based discovery path visible.
 
-This approach was chosen so the full pipeline is visible in one file (`spicedb-emitter.ts`) and can be tested without TypeSpec plugin infrastructure.
+This approach was chosen so the full pipeline is visible in one file (`pipeline.ts`) and can be tested without TypeSpec plugin infrastructure. For the roadmap toward converting to a plugin, see [docs/Emitter-Plugin-Roadmap.md](docs/Emitter-Plugin-Roadmap.md).
 
 ### The 7 Mutations Per Extension
 
@@ -206,4 +209,8 @@ test/                            203 tests
 
 - **Node.js in CI** for `tsp` + `tsx`; Go loader example (`go-loader-example/`) needs no Node at runtime
 - **New extension types** require adding logic to `src/expand.ts`
-- **Two JSON Schema paths** — built-in `@jsonSchema` emit vs unified schema
+- **Two JSON Schema paths** — built-in `@jsonSchema` emit vs unified schema (mitigated by `--emit-jsonschema` flag which runs both in one pass)
+
+## Future: TypeSpec Emitter Plugin
+
+The current standalone CLI architecture is intentional — see [Decorators vs CLI Pipeline](#decorators-vs-cli-pipeline) above. For the roadmap toward converting to a registered TypeSpec emitter plugin (`$onEmit`), including migration triggers, reuse analysis, and custom decorator opportunities, see [docs/Emitter-Plugin-Roadmap.md](docs/Emitter-Plugin-Roadmap.md).

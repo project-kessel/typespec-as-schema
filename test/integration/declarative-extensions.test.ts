@@ -207,3 +207,17 @@ describe("CascadeDeletePolicy discovery and expansion", () => {
     expect(pipeline.diagnostics).toEqual([]);
   });
 });
+
+// ─── Discovery Health Tests ─────────────────────────────────────────
+
+describe("Discovery health", () => {
+  it("does not contain unexpected skipped-alias warnings", () => {
+    const skippedWarnings = pipeline.warnings.filter((w) => w.startsWith("Skipped statement"));
+    expect(skippedWarnings).toEqual([]);
+  });
+
+  it("does not report alias resolution failures", () => {
+    const resolutionWarnings = pipeline.warnings.filter((w) => w.includes("Alias resolution:"));
+    expect(resolutionWarnings).toEqual([]);
+  });
+});

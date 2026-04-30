@@ -19,10 +19,12 @@ export interface ResourceDef {
   relations: RelationDef[];
 }
 
+export type KesselVerb = "read" | "write" | "create" | "delete";
+
 export interface V1Extension {
   application: string;
   resource: string;
-  verb: string;
+  verb: KesselVerb;
   v2Perm: string;
 }
 

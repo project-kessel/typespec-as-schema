@@ -50,10 +50,14 @@ describe("discoverV1Permissions", () => {
       alias GoodPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
     `);
 
-    const warnings = { skipped: [] as string[] };
+    const warnings = {
+      skipped: [] as string[],
+      stats: { aliasesAttempted: 0, aliasesResolved: 0, resourcesFound: 0, extensionsFound: 0 },
+    };
     const perms = discoverV1Permissions(program, warnings);
     expect(perms).toHaveLength(1);
     expect(Array.isArray(warnings.skipped)).toBe(true);
+    expect(warnings.stats.extensionsFound).toBe(1);
   }, 30_000);
 });
 
