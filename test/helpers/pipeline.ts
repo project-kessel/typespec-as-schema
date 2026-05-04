@@ -2,7 +2,7 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import { generateMetadata, generateIR } from "../../src/generate.js";
 import { compilePipeline as runPipeline, type PipelineResult, type PipelineOptions } from "../../src/pipeline.js";
-import { rbacProvider } from "../../providers/rbac/rbac-provider.js";
+import { rbacProvider } from "../../schema/rbac/rbac-provider.js";
 
 export type { PipelineResult };
 

@@ -5,8 +5,8 @@
 import "@typespec/json-schema";
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
-import "../providers/rbac/rbac-extensions.tsp";
-import "../providers/rbac/rbac.tsp";
+import "./rbac/rbac-extensions.tsp";
+import "./rbac/rbac.tsp";
 
 using JsonSchema;
 using Kessel;
@@ -14,7 +14,7 @@ using Kessel;
 namespace Inventory;
 
 // ─── Extension Applications ──────────────────────────────────────────
-// V1WorkspacePermission is owned by the RBAC provider (../providers/rbac/).
+// V1WorkspacePermission is owned by the RBAC provider (./rbac/).
 // Services import the RBAC extension template to register permissions.
 
 /** Maps inventory:hosts:read → inventory_host_view on workspace */

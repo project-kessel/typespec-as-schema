@@ -5,7 +5,7 @@ import { compile, NodeHost, type Program, type Model } from "@typespec/compiler"
 import { buildRegistry } from "../../src/registry.js";
 import { findExtensionTemplate } from "../../src/discover-extensions.js";
 import { getNamespaceFQN } from "../../src/utils.js";
-import { rbacProvider } from "../../providers/rbac/rbac-provider.js";
+import { rbacProvider } from "../../schema/rbac/rbac-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntrypoint = path.resolve(__dirname, "../../schema/main.tsp");
@@ -51,7 +51,7 @@ describe("Registry-TSP contract", () => {
   });
 
   it("RBAC provider's valid verbs matches expected set", async () => {
-    const { VALID_VERBS } = await import("../../providers/rbac/rbac-provider.js");
+    const { VALID_VERBS } = await import("../../schema/rbac/rbac-provider.js");
     const expectedVerbs = new Set(["read", "write", "create", "delete"]);
     expect(VALID_VERBS).toEqual(expectedVerbs);
   });

@@ -3,10 +3,10 @@
 //
 // Platform extensions (CascadeDeletePolicy, ResourceAnnotation) live in
 // ../lib/kessel-extensions.tsp. RBAC-specific extensions (V1WorkspacePermission)
-// live in ../providers/rbac/ — RBAC owns its extension templates and logic.
+// live in ./rbac/ — RBAC owns its extension templates and logic.
 
 import "../lib/kessel-extensions.tsp";
-import "../providers/rbac/rbac-extensions.tsp";
-import "../providers/rbac/rbac.tsp";
+import "./rbac/rbac-extensions.tsp";
+import "./rbac/rbac.tsp";
 import "./hbi.tsp";
 import "./remediations.tsp";

@@ -17,7 +17,7 @@ import { bodyToZed, slotName, flattenAnnotations, findResource, isAssignable } f
 import { validateOutputSize } from "./safety.js";
 import { compilePipeline } from "./pipeline.js";
 import type { ExtensionProvider } from "./provider.js";
-import { rbacProvider } from "../providers/rbac/rbac-provider.js";
+import { rbacProvider } from "../schema/rbac/rbac-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -165,7 +165,6 @@ function startWatch(args: string[], resolvedMain: string): void {
   const projectRoot = path.dirname(resolvedMain);
   const watchDirs = [
     path.resolve(projectRoot, "../lib"),
-    path.resolve(projectRoot, "../providers"),
     projectRoot,
   ].filter((d) => fs.existsSync(d));
 

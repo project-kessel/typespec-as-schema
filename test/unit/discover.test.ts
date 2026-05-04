@@ -6,11 +6,11 @@ import * as os from "os";
 import { compile, NodeHost, type Program } from "@typespec/compiler";
 import { findExtensionTemplate } from "../../src/discover-extensions.js";
 import { discoverResources } from "../../src/discover-resources.js";
-import { discoverV1Permissions } from "../../providers/rbac/rbac-provider.js";
+import { discoverV1Permissions } from "../../schema/rbac/rbac-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const libDir = path.resolve(__dirname, "../../lib");
-const rbacExtDir = path.resolve(__dirname, "../../providers/rbac");
+const rbacExtDir = path.resolve(__dirname, "../../schema/rbac");
 
 async function compileInlineWithLib(tspSource: string): Promise<Program> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "discover-test-"));
