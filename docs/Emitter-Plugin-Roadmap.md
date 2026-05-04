@@ -9,8 +9,8 @@ This document covers the path from the current standalone CLI pipeline to a regi
 The Kessel schema emitter is a **standalone TypeScript CLI** that uses the TypeSpec compiler as a library. It does not register as a TypeSpec emitter plugin and does not use custom decorators.
 
 ```
-schema/*.tsp ──> compile() ──> Program ──> discover ──> expand ──> validate ──> generate
-                 (library)      (AST)       (walk)      (pure)     (safety)     (emit)
+schema/*.tsp ──> compile() ──> Program ──> discover ──> provider expand ──> validate ──> generate
+                 (library)      (AST)       (walk)      (primitives)        (safety)     (emit)
 ```
 
 Key properties:
@@ -49,7 +49,7 @@ Create a `$lib` using `createTypeSpecLibrary` that defines the emitter's configu
 import { createTypeSpecLibrary, type JSONSchemaType } from "@typespec/compiler";
 
 export interface KesselEmitterOptions {
-  "output-format": "spicedb" | "ir" | "metadata" | "unified-jsonschema";
+  "output-format": "spicedb" | "ir" | "metadata" | "unified-jsonschema" | "annotations";
   "ir-output-path"?: string;
   "strict"?: boolean;
 }
@@ -59,7 +59,7 @@ const optionsSchema: JSONSchemaType<KesselEmitterOptions> = {
   properties: {
     "output-format": {
       type: "string",
-      enum: ["spicedb", "ir", "metadata", "unified-jsonschema"],
+      enum: ["spicedb", "ir", "metadata", "unified-jsonschema", "annotations"],
       nullable: true,
     },
     "ir-output-path": { type: "string", format: "absolute-path", nullable: true },
@@ -90,10 +90,11 @@ export async function $onEmit(context: EmitContext<KesselEmitterOptions>) {
   if (context.program.compilerOptions.noEmit) return;
 
   // Existing pipeline stages work unchanged:
-  const { resources } = discoverResources(context.program);
-  const extensions = discoverV1Permissions(context.program);
+  const allTemplates = buildRegistry(providers);
+  const { resources } = discoverResources(context.program, allTemplates);
   const annotations = discoverAnnotations(context.program);
   const cascadePolicies = discoverCascadeDeletePolicies(context.program);
+  // Providers run their own discover() + expand() via ExtensionProvider
 
   // ... expand, validate, generate ...
 
@@ -131,7 +132,7 @@ Going the plugin route gives access to decorator infrastructure. Two decorators 
 
 ### `@kesselExtension` — reliable discovery
 
-Currently, `discover.ts` identifies extension template instances through name-based matching (`isInstanceOf` falls back to comparing `model.name` and namespace strings). A decorator gives you a compiler-guaranteed state set:
+Currently, `discover-extensions.ts` identifies extension template instances through name-based matching (`isInstanceOf` falls back to comparing `model.name` and namespace strings). A decorator gives you a compiler-guaranteed state set:
 
 ```typescript
 // Decorator implementation
@@ -176,15 +177,17 @@ Most existing modules carry over unchanged. The pipeline architecture was design
 | `utils.ts` | As-is | None |
 | `parser.ts` | As-is | None |
 | `registry.ts` | As-is | None |
-| `expand.ts` | As-is | Pure data transform, no TypeSpec imports |
-| `discover.ts` | Mostly | Could simplify if using decorator state sets instead of name matching |
+| `primitives.ts` | As-is | Pure data transforms (graph mutations + cascade delete), no TypeSpec imports |
+| `discover-extensions.ts` | Mostly | Could simplify if using decorator state sets instead of name matching |
+| `discover-platform.ts` | As-is | Platform annotation/cascade discovery |
+| `discover-resources.ts` | As-is | Resource graph extraction |
 | `safety.ts` | As-is | Wire limits from emitter options instead of `PipelineOptions` |
 | `generate.ts` | As-is | Use `emitFile()` instead of `fs.writeFileSync()` |
 | `pipeline.ts` | Replace | `$onEmit` becomes the orchestrator; remove `compile()` call |
 | `spicedb-emitter.ts` | Remove | CLI replaced by `tsp compile --emit` |
 | `lib.ts` | Adapt | Add `$lib`, `$onEmit`, optional decorator exports |
 
-**Lines of code impact**: ~80% of the codebase (`types.ts`, `utils.ts`, `parser.ts`, `registry.ts`, `expand.ts`, `safety.ts`, `generate.ts`) is pure data transformation with no coupling to the CLI entry point. The main work is writing the `$lib` + `$onEmit` boilerplate (~50 lines) and adapting integration tests.
+**Lines of code impact**: ~80% of the codebase (`types.ts`, `utils.ts`, `parser.ts`, `registry.ts`, `primitives.ts`, `discover-*.ts`, `safety.ts`, `generate.ts`) is pure data transformation with no coupling to the CLI entry point. The main work is writing the `$lib` + `$onEmit` boilerplate (~50 lines) and adapting integration tests.
 
 ---
 
@@ -207,7 +210,7 @@ The current standalone CLI architecture is the right choice today. Convert to a 
 | Aspect | Current (CLI) | Plugin |
 |--------|--------------|--------|
 | **Pipeline visibility** | Single file (`pipeline.ts`) shows full flow | `$onEmit` replaces it — functionally the same, just triggered by compiler lifecycle |
-| **CLI ergonomics** | `--preview <perm>`, `--metadata` are CLI flags | Become emitter options: `--option kessel-emitter.output-format=metadata` |
+| **CLI ergonomics** | `--preview <perm>`, `--metadata`, `--annotations` are CLI flags | Become emitter options: `--option kessel-emitter.output-format=metadata` |
 | **Test simplicity** | `compilePipeline()` + pure function unit tests | Integration tests need `createTestRunner()` from `@typespec/compiler/testing` |
 | **No plugin versioning** | Depend only on `@typespec/compiler` as a library | Must maintain plugin lifecycle compatibility across TypeSpec versions |
 

@@ -1,27 +1,33 @@
+// Compilation Pipeline
+//
+// Provider-driven pipeline that orchestrates discovery, validation,
+// expansion, and generation. The pipeline is provider-neutral — it does
+// not import or hard-code any domain-specific expansion logic. Callers
+// (CLI, tests) supply the provider list via PipelineOptions.providers.
+
 import { compile, NodeHost, type Program, type CompilerOptions } from "@typespec/compiler";
-import type { ResourceDef, V1Extension, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry } from "./types.js";
+import type { ResourceDef, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry, ProviderDiscoveryResult } from "./types.js";
+import { discoverResources } from "./discover-resources.js";
 import {
-  discoverResources,
-  discoverV1Permissions,
   discoverAnnotations,
   discoverCascadeDeletePolicies,
   type DiscoveryWarnings,
-} from "./discover.js";
+} from "./discover-platform.js";
 import { generateSpiceDB, generateUnifiedJsonSchemas } from "./generate.js";
+import { expandCascadeDeletePolicies } from "./expand-cascade.js";
 import {
-  expandV1Permissions,
-  expandCascadeDeletePolicies,
-} from "./expand.js";
-import {
-  validateComplexityBudget,
+  validateProviderComplexityBudget,
   validatePreExpansionExpressions,
   validatePermissionExpressions,
   validateOutputSize,
   ExpansionTimeoutError,
+  DiscoveryTimeoutError,
   DEFAULT_LIMITS,
   type SafetyLimits,
   type ValidationDiagnostic,
 } from "./safety.js";
+import type { ExtensionProvider } from "./provider.js";
+import { buildRegistry } from "./registry.js";
 
 export interface PipelineOptions {
   limits?: Partial<SafetyLimits>;
@@ -29,18 +35,25 @@ export interface PipelineOptions {
   emitJsonSchema?: boolean;
   /** Output directory for emitters (defaults to tsp-output next to the main file). */
   outputDir?: string;
+  /** Extension providers to use. The composition root (CLI, tests) must supply these. */
+  providers: ExtensionProvider[];
 }
+
+export type { ProviderDiscoveryResult } from "./types.js";
 
 export interface PipelineResult {
   resources: ResourceDef[];
-  extensions: V1Extension[];
+  providerResults: ProviderDiscoveryResult[];
+  providerMap: ReadonlyMap<string, ExtensionProvider>;
   annotations: Map<string, AnnotationEntry[]>;
   cascadePolicies: CascadeDeleteEntry[];
   fullSchema: ResourceDef[];
   spicedbOutput: string;
   unifiedJsonSchemas: Record<string, UnifiedJsonSchema>;
+  preExpansionDiagnostics: ValidationDiagnostic[];
   diagnostics: ValidationDiagnostic[];
   warnings: string[];
+  ownedNamespaces: Set<string>;
 }
 
 /**
@@ -50,9 +63,22 @@ export interface PipelineResult {
  */
 export async function compilePipeline(
   mainFile: string,
-  options?: PipelineOptions,
+  options: PipelineOptions,
 ): Promise<PipelineResult> {
   const limits: SafetyLimits = { ...DEFAULT_LIMITS, ...options?.limits };
+  const providers = options.providers;
+
+  const seenIds = new Set<string>();
+  for (const p of providers) {
+    if (seenIds.has(p.id)) {
+      throw new Error(
+        `Duplicate provider ID "${p.id}". Each provider must have a unique ID.`,
+      );
+    }
+    seenIds.add(p.id);
+  }
+
+  const providerMap = new Map(providers.map((p) => [p.id, p]));
 
   const compilerOpts: CompilerOptions = { noEmit: true };
   if (options?.emitJsonSchema) {
@@ -76,10 +102,26 @@ export async function compilePipeline(
     stats: { aliasesAttempted: 0, aliasesResolved: 0, resourcesFound: 0, extensionsFound: 0 },
   };
 
-  const { resources } = discoverResources(program);
+  // ─── Resource discovery (generic) ────────────────────────────────
+  const registryResult = buildRegistry(providers);
+  warnings.push(...registryResult.warnings);
+  const { resources } = discoverResources(program, registryResult.templates);
   discoveryWarnings.stats.resourcesFound = resources.length;
 
-  const extensions = discoverV1Permissions(program, discoveryWarnings);
+  // ─── Provider discovery ──────────────────────────────────────────
+  const providerResults: ProviderDiscoveryResult[] = [];
+  for (const provider of providers) {
+    const discoverStart = performance.now();
+    const discovered = provider.discover(program);
+    const discoverElapsed = performance.now() - discoverStart;
+    if (discoverElapsed > limits.discoveryTimeoutMs) {
+      throw new DiscoveryTimeoutError(provider.id, Math.round(discoverElapsed), limits.discoveryTimeoutMs);
+    }
+    providerResults.push({ providerId: provider.id, discovered });
+    discoveryWarnings.stats.extensionsFound += discovered.length;
+  }
+
+  // ─── Platform discovery (annotations, cascade) ───────────────────
   const annotations = discoverAnnotations(program, discoveryWarnings);
   const cascadePolicies = discoverCascadeDeletePolicies(program, discoveryWarnings);
 
@@ -93,15 +135,27 @@ export async function compilePipeline(
     );
   }
 
+  // ─── Namespace cross-check (provider-driven) ────────────────────
   const knownNamespaces = new Set(resources.map((r) => r.namespace));
-  for (const perm of extensions) {
-    if (!knownNamespaces.has(perm.application)) {
-      warnings.push(`extension application "${perm.application}" has no matching resource namespace`);
+  for (const pr of providerResults) {
+    const provider = providerMap.get(pr.providerId)!;
+    const paramKey = provider.applicationParamKey;
+    if (!paramKey) continue;
+    for (const ext of pr.discovered) {
+      const app = ext.params[paramKey];
+      if (app && !knownNamespaces.has(app)) {
+        warnings.push(`extension ${paramKey} "${app}" has no matching resource namespace`);
+      }
     }
   }
 
-  validateComplexityBudget(extensions, limits);
+  // ─── Complexity budget per provider ──────────────────────────────
+  for (const pr of providerResults) {
+    const provider = providerMap.get(pr.providerId)!;
+    validateProviderComplexityBudget(pr.discovered, provider, limits);
+  }
 
+  // ─── Pre-expansion validation ────────────────────────────────────
   const preExpansionDiags = validatePreExpansionExpressions(resources);
   if (preExpansionDiags.length > 0) {
     for (const d of preExpansionDiags) {
@@ -109,15 +163,32 @@ export async function compilePipeline(
     }
   }
 
+  // ─── Provider expansion loop ─────────────────────────────────────
   const expansionStart = performance.now();
-  const { resources: expanded, warnings: expansionWarnings } = expandV1Permissions(resources, extensions);
-  warnings.push(...expansionWarnings);
-  const fullSchema = expandCascadeDeletePolicies(expanded, cascadePolicies);
+  let currentResources = resources;
+  for (const pr of providerResults) {
+    const provider = providerMap.get(pr.providerId)!;
+    const result = provider.expand(currentResources, pr.discovered);
+    currentResources = result.resources;
+    warnings.push(...result.warnings);
+  }
+
+  // ─── Cascade-delete expansion ────────────────────────────────────
+  for (const provider of providers) {
+    if (provider.onBeforeCascadeDelete) {
+      currentResources = provider.onBeforeCascadeDelete(currentResources);
+    }
+  }
+  const cascadeResult = expandCascadeDeletePolicies(currentResources, cascadePolicies);
+  const fullSchema = cascadeResult.resources;
+  warnings.push(...cascadeResult.warnings);
+
   const expansionElapsed = performance.now() - expansionStart;
   if (expansionElapsed > limits.expansionTimeoutMs) {
     throw new ExpansionTimeoutError(Math.round(expansionElapsed), limits.expansionTimeoutMs);
   }
 
+  // ─── Post-expansion validation ───────────────────────────────────
   const diagnostics = validatePermissionExpressions(fullSchema);
   const spicedbOutput = generateSpiceDB(fullSchema);
 
@@ -126,17 +197,21 @@ export async function compilePipeline(
     warnings.push(outputSizeResult.warning);
   }
 
-  const unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema);
+  const ownedNamespaces = new Set(providers.flatMap((p) => p.ownedNamespaces ?? []));
+  const unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema, ownedNamespaces);
 
   return {
     resources,
-    extensions,
+    providerResults,
+    providerMap,
     annotations,
     cascadePolicies,
     fullSchema,
     spicedbOutput,
     unifiedJsonSchemas,
+    preExpansionDiagnostics: preExpansionDiags,
     diagnostics,
     warnings,
+    ownedNamespaces,
   };
 }

@@ -56,7 +56,7 @@ describe("generateUnifiedJsonSchemas", () => {
       },
     ];
 
-    const schemas = generateUnifiedJsonSchemas(resources);
+    const schemas = generateUnifiedJsonSchemas(resources, new Set(["rbac"]));
     expect(Object.keys(schemas)).toHaveLength(0);
   });
 

@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { generateIR, IR_VERSION } from "../../src/lib.js";
-import { expandCascadeDeletePolicies } from "../../src/expand.js";
-import { compilePipeline, type PipelineResult } from "../helpers/pipeline.js";
+import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
+import { compilePipeline, allDiscovered, type PipelineResult } from "../helpers/pipeline.js";
 
 let pipeline: PipelineResult;
+
+const allExtensions = () => allDiscovered(pipeline);
 
 beforeAll(async () => {
   pipeline = await compilePipeline();
@@ -13,11 +15,11 @@ beforeAll(async () => {
 
 describe("V1 permission discovery", () => {
   it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
-    expect(pipeline.extensions).toHaveLength(4);
+    expect(allExtensions()).toHaveLength(4);
   });
 
   it("extracts correct v2Perm from each instance", () => {
-    const perms = pipeline.extensions.map((e) => e.v2Perm).sort();
+    const perms = allExtensions().map((e) => e.params.v2Perm).sort();
     expect(perms).toEqual([
       "inventory_host_update",
       "inventory_host_view",
@@ -27,7 +29,7 @@ describe("V1 permission discovery", () => {
   });
 
   it("extracts correct application names", () => {
-    const apps = new Set(pipeline.extensions.map((e) => e.application));
+    const apps = new Set(allExtensions().map((e) => e.params.application));
     expect(apps.has("inventory")).toBe(true);
     expect(apps.has("remediations")).toBe(true);
   });
@@ -123,34 +125,34 @@ describe("Annotation discovery", () => {
 
 describe("IR generation with annotations", () => {
   it("includes annotations in IR output", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
     expect(ir.annotations).toBeDefined();
     expect(ir.annotations!["inventory/host"]).toBeDefined();
   });
 
   it("IR annotations contain correct key-value pairs", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
     const hostAnnotations = ir.annotations!["inventory/host"];
     expect(hostAnnotations["feature_flag"]).toBe("staleness_v2");
     expect(hostAnnotations["retention_days"]).toBe("90");
   });
 
   it("IR version matches IR_VERSION constant", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
     expect(ir.version).toBe(IR_VERSION);
   });
 
   it("IR omits annotations field when no annotations exist", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions);
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap);
     expect(ir.annotations).toBeUndefined();
   });
 
   it("IR contains all expected top-level fields", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.extensions, pipeline.annotations);
+    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
     expect(ir.generatedAt).toBeDefined();
     expect(ir.source).toBe("schema/test.tsp");
     expect(ir.resources.length).toBeGreaterThan(0);
-    expect(ir.extensions.length).toBeGreaterThan(0);
+    expect(Object.keys(ir.extensions).length).toBeGreaterThan(0);
     expect(ir.spicedb).toContain("definition rbac/");
     expect(ir.metadata).toBeDefined();
     expect(ir.jsonSchemas).toBeDefined();
@@ -185,7 +187,7 @@ describe("CascadeDeletePolicy discovery and expansion", () => {
   });
 
   it("does not duplicate delete if called twice", () => {
-    const doubleExpanded = expandCascadeDeletePolicies(pipeline.fullSchema, pipeline.cascadePolicies);
+    const { resources: doubleExpanded } = expandCascadeDeletePolicies(pipeline.fullSchema, pipeline.cascadePolicies);
     const host = doubleExpanded.find((r) => r.name === "host" && r.namespace === "inventory")!;
     const deleteCount = host.relations.filter((r) => r.name === "delete").length;
     expect(deleteCount).toBe(1);

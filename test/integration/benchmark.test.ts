@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { generateMetadata } from "../../src/lib.js";
 import { parseZedDefinitions } from "../helpers/zed-parser.js";
-import { compilePipeline, goldenDir, type PipelineResult } from "../helpers/pipeline.js";
+import { compilePipeline, goldenDir, allDiscovered, type PipelineResult } from "../helpers/pipeline.js";
 
 let pipeline: PipelineResult;
 
@@ -41,7 +41,7 @@ describe("G1: Authorization Completeness", () => {
 describe("G2: Data Field Support", () => {
   it("discovers at least one resource and extension", () => {
     expect(pipeline.resources.length).toBeGreaterThanOrEqual(1);
-    expect(pipeline.extensions.length).toBeGreaterThanOrEqual(1);
+    expect(allDiscovered(pipeline).length).toBeGreaterThanOrEqual(1);
   });
 
   it("HBI host resource is discovered", () => {
@@ -62,8 +62,9 @@ describe("G4: Cooperative Extensions", () => {
   });
 
   it("extensions are invoked from HBI/Remediations, not inlined in RBAC", () => {
-    expect(pipeline.extensions.some((e) => e.application === "inventory")).toBe(true);
-    expect(pipeline.extensions.some((e) => e.application === "remediations")).toBe(true);
+    const exts = allDiscovered(pipeline);
+    expect(exts.some((e) => e.params.application === "inventory")).toBe(true);
+    expect(exts.some((e) => e.params.application === "remediations")).toBe(true);
   });
 
   it("no duplicate permission names on role for same extension", () => {
@@ -123,11 +124,12 @@ describe("M1: Feature Coverage", () => {
   });
 
   it("V1WorkspacePermission extension mechanism discovers extensions from aliases", () => {
-    expect(pipeline.extensions.length).toBeGreaterThanOrEqual(4);
-    expect(pipeline.extensions.some((e) => e.v2Perm === "inventory_host_view")).toBe(true);
-    expect(pipeline.extensions.some((e) => e.v2Perm === "inventory_host_update")).toBe(true);
-    expect(pipeline.extensions.some((e) => e.v2Perm === "remediations_remediation_view")).toBe(true);
-    expect(pipeline.extensions.some((e) => e.v2Perm === "remediations_remediation_update")).toBe(true);
+    const exts = allDiscovered(pipeline);
+    expect(exts.length).toBeGreaterThanOrEqual(4);
+    expect(exts.some((e) => e.params.v2Perm === "inventory_host_view")).toBe(true);
+    expect(exts.some((e) => e.params.v2Perm === "inventory_host_update")).toBe(true);
+    expect(exts.some((e) => e.params.v2Perm === "remediations_remediation_view")).toBe(true);
+    expect(exts.some((e) => e.params.v2Perm === "remediations_remediation_update")).toBe(true);
   });
 
   it("any_any_any wildcard naming", () => {
@@ -162,7 +164,7 @@ describe("M1: Feature Coverage", () => {
   });
 
   it("metadata output lists permissions and resources per service", () => {
-    const metadata = generateMetadata(pipeline.resources, pipeline.extensions);
+    const metadata = generateMetadata(pipeline.resources, pipeline.providerResults, pipeline.providerMap);
     expect(metadata.inventory).toBeDefined();
     expect(metadata.inventory.permissions).toContain("inventory_host_view");
     expect(metadata.remediations).toBeDefined();
@@ -277,7 +279,7 @@ describe("M4: SpiceDB Output Correctness vs Golden Reference", () => {
 
 describe("M4: Metadata Output Correctness", () => {
   it("matches expected benchmark metadata", () => {
-    const metadata = generateMetadata(pipeline.resources, pipeline.extensions);
+    const metadata = generateMetadata(pipeline.resources, pipeline.providerResults, pipeline.providerMap);
 
     expect(metadata.inventory).toBeDefined();
     expect(metadata.inventory.permissions).toEqual(

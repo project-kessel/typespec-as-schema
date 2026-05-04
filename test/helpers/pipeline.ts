@@ -1,7 +1,8 @@
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { generateMetadata, generateIR } from "../../src/generate.js";
-import { compilePipeline as runPipeline, type PipelineResult } from "../../src/pipeline.js";
+import { compilePipeline as runPipeline, type PipelineResult, type PipelineOptions } from "../../src/pipeline.js";
+import { rbacProvider } from "../../providers/rbac/rbac-provider.js";
 
 export type { PipelineResult };
 
@@ -11,13 +12,19 @@ export const pocRoot = path.resolve(__dirname, "../..");
 export const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
 export const goldenDir = path.resolve(pocRoot, "test/fixtures");
 
+export const DEFAULT_TEST_PROVIDERS = [rbacProvider];
+
 /**
  * Compiles the main.tsp schema through the real pipeline — the same
  * compile -> discover -> validate -> expand -> validate -> generate path
- * that the CLI uses. No shadow implementation.
+ * that the CLI uses. Providers are supplied explicitly.
  */
-export async function compilePipeline(): Promise<PipelineResult> {
-  return runPipeline(mainTsp);
+export async function compilePipeline(options?: Partial<PipelineOptions>): Promise<PipelineResult> {
+  return runPipeline(mainTsp, { providers: DEFAULT_TEST_PROVIDERS, ...options });
+}
+
+export function allDiscovered(result: PipelineResult) {
+  return result.providerResults.flatMap((pr) => pr.discovered);
 }
 
 export { generateMetadata, generateIR };

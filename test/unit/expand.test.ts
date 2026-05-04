@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   type ResourceDef,
-  type V1Extension,
   type RelationBody,
   type CascadeDeleteEntry,
   findResource,
   slotName,
 } from "../../src/lib.js";
-import { expandV1Permissions, expandCascadeDeletePolicies } from "../../src/expand.js";
+import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../providers/rbac/rbac-provider.js";
+import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
 
 function makeBaseRbacResources(): ResourceDef[] {
   return [
@@ -264,7 +264,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
   ];
 
   it("adds delete permission to matching child resource", () => {
-    const result = expandCascadeDeletePolicies(makeHostWithRbac(), defaultPolicies);
+    const { resources: result } = expandCascadeDeletePolicies(makeHostWithRbac(), defaultPolicies);
     const host = result.find((r) => r.name === "host" && r.namespace === "inventory")!;
     const deletePerm = host.relations.find((r) => r.name === "delete");
     expect(deletePerm).toBeDefined();
@@ -276,7 +276,9 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
   });
 
   it("adds delete permission to rbac/role referencing global wildcard", () => {
-    const result = expandCascadeDeletePolicies(makeHostWithRbac(), defaultPolicies);
+    const resources = makeHostWithRbac();
+    const scaffolded = wireDeleteScaffold(resources);
+    const { resources: result } = expandCascadeDeletePolicies(scaffolded, defaultPolicies);
     const role = findResource(result, "rbac", "role")!;
     const deletePerm = findRelation(role, "delete");
     expect(deletePerm).toBeDefined();
@@ -284,7 +286,9 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
   });
 
   it("adds delete permission to rbac/role_binding as intersection", () => {
-    const result = expandCascadeDeletePolicies(makeHostWithRbac(), defaultPolicies);
+    const resources = makeHostWithRbac();
+    const scaffolded = wireDeleteScaffold(resources);
+    const { resources: result } = expandCascadeDeletePolicies(scaffolded, defaultPolicies);
     const rb = findResource(result, "rbac", "role_binding")!;
     const deletePerm = findRelation(rb, "delete");
     expect(deletePerm).toBeDefined();
@@ -295,7 +299,9 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
   });
 
   it("adds delete permission to rbac/workspace as union", () => {
-    const result = expandCascadeDeletePolicies(makeHostWithRbac(), defaultPolicies);
+    const resources = makeHostWithRbac();
+    const scaffolded = wireDeleteScaffold(resources);
+    const { resources: result } = expandCascadeDeletePolicies(scaffolded, defaultPolicies);
     const ws = findResource(result, "rbac", "workspace")!;
     const deletePerm = findRelation(ws, "delete");
     expect(deletePerm).toBeDefined();
@@ -310,9 +316,11 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
       { childApplication: "nonexistent", childResource: "widget", parentRelation: "workspace" },
     ];
     const original = makeHostWithRbac();
-    const result = expandCascadeDeletePolicies(original, policies);
+    const { resources: result, warnings } = expandCascadeDeletePolicies(original, policies);
     const host = result.find((r) => r.name === "host")!;
     expect(host.relations.some((r) => r.name === "delete")).toBe(false);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("nonexistent/widget");
   });
 
   it("skips if child already has a delete permission", () => {
@@ -322,7 +330,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
       name: "delete",
       body: { kind: "ref", name: "existing_delete" },
     });
-    const result = expandCascadeDeletePolicies(resources, defaultPolicies);
+    const { resources: result } = expandCascadeDeletePolicies(resources, defaultPolicies);
     const resultHost = result.find((r) => r.name === "host")!;
     const deletePerms = resultHost.relations.filter((r) => r.name === "delete");
     expect(deletePerms.length).toBe(1);
@@ -331,7 +339,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
 
   it("handles empty policies array", () => {
     const original = makeHostWithRbac();
-    const result = expandCascadeDeletePolicies(original, []);
+    const { resources: result } = expandCascadeDeletePolicies(original, []);
     expect(result.length).toBe(original.length);
     const ws = findResource(result, "rbac", "workspace")!;
     expect(findRelation(ws, "delete")).toBeUndefined();
@@ -340,7 +348,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
   it("does not mutate the input array", () => {
     const original = makeHostWithRbac();
     const originalRelCounts = original.map((r) => r.relations.length);
-    expandCascadeDeletePolicies(original, defaultPolicies);
+    const { resources: _result } = expandCascadeDeletePolicies(original, defaultPolicies);
     for (let i = 0; i < original.length; i++) {
       expect(original[i].relations.length).toBe(originalRelCounts[i]);
     }
@@ -350,14 +358,17 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
     const policies: CascadeDeleteEntry[] = [
       { childApplication: "INVENTORY", childResource: "HOST", parentRelation: "workspace" },
     ];
-    const result = expandCascadeDeletePolicies(makeHostWithRbac(), policies);
+    const { resources: result } = expandCascadeDeletePolicies(makeHostWithRbac(), policies);
     const host = result.find((r) => r.name === "host")!;
     expect(host.relations.some((r) => r.name === "delete")).toBe(true);
   });
 
   it("is idempotent — calling twice does not duplicate delete on RBAC types", () => {
-    const first = expandCascadeDeletePolicies(makeHostWithRbac(), defaultPolicies);
-    const second = expandCascadeDeletePolicies(first, defaultPolicies);
+    const resources = makeHostWithRbac();
+    const scaffolded1 = wireDeleteScaffold(resources);
+    const { resources: first } = expandCascadeDeletePolicies(scaffolded1, defaultPolicies);
+    const scaffolded2 = wireDeleteScaffold(first);
+    const { resources: second } = expandCascadeDeletePolicies(scaffolded2, defaultPolicies);
     for (const name of ["role", "role_binding", "workspace"] as const) {
       const res = findResource(second, "rbac", name)!;
       const deleteCount = res.relations.filter((r) => r.name === "delete").length;
@@ -368,7 +379,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
   });
 
   it("still adds delete to child when RBAC scaffold is missing", () => {
-    const result = expandCascadeDeletePolicies(makeHostResourceOnly(), defaultPolicies);
+    const { resources: result } = expandCascadeDeletePolicies(makeHostResourceOnly(), defaultPolicies);
     const host = result.find((r) => r.name === "host")!;
     expect(host.relations.some((r) => r.name === "delete")).toBe(true);
   });

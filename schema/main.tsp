@@ -1,14 +1,12 @@
 // Schema Unification Entrypoint
 // Imports all service schemas for unified compilation.
-// A custom emitter would walk the full type graph to produce:
-//   1. SpiceDB/Zed schema (from relation types)
-//   2. JSONSchema (from data models, via built-in emitter)
-//   3. Intermediate representation (for Kessel Inventory API)
 //
-// Extension templates (V1WorkspacePermission + patch rules) live in ../lib/kessel-extensions.tsp
-// (platform vocabulary; service schemas import the same).
+// Platform extensions (CascadeDeletePolicy, ResourceAnnotation) live in
+// ../lib/kessel-extensions.tsp. RBAC-specific extensions (V1WorkspacePermission)
+// live in ../providers/rbac/ — RBAC owns its extension templates and logic.
 
 import "../lib/kessel-extensions.tsp";
-import "./rbac.tsp";
+import "../providers/rbac/rbac-extensions.tsp";
+import "../providers/rbac/rbac.tsp";
 import "./hbi.tsp";
 import "./remediations.tsp";

@@ -5,6 +5,15 @@
 definition rbac/principal {
 }
 
+definition inventory/host {
+    permission workspace = t_workspace
+    permission view = t_workspace->inventory_host_view
+    permission update = t_workspace->inventory_host_update
+    permission delete = t_workspace->delete
+
+    relation t_workspace: rbac/workspace
+}
+
 definition rbac/role {
     permission any_any_any = t_any_any_any
     permission inventory_any_any = t_inventory_any_any
@@ -65,13 +74,4 @@ definition rbac/workspace {
 
     relation t_parent: rbac/workspace
     relation t_binding: rbac/role_binding
-}
-
-definition inventory/host {
-    permission workspace = t_workspace
-    permission view = t_workspace->inventory_host_view
-    permission update = t_workspace->inventory_host_update
-    permission delete = t_workspace->delete
-
-    relation t_workspace: rbac/workspace
 }

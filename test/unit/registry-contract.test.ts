@@ -2,26 +2,29 @@ import { describe, it, expect, beforeAll } from "vitest";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { compile, NodeHost, type Program, type Model } from "@typespec/compiler";
-import { EXTENSION_TEMPLATES } from "../../src/registry.js";
-import { findExtensionTemplate, VALID_VERBS } from "../../src/discover.js";
+import { buildRegistry } from "../../src/registry.js";
+import { findExtensionTemplate } from "../../src/discover-extensions.js";
 import { getNamespaceFQN } from "../../src/utils.js";
+import { rbacProvider } from "../../providers/rbac/rbac-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const libEntrypoint = path.resolve(__dirname, "../../lib/kessel-extensions.tsp");
+const mainEntrypoint = path.resolve(__dirname, "../../schema/main.tsp");
+
+const { templates: ALL_TEMPLATES } = buildRegistry([rbacProvider]);
 
 let program: Program;
 
 beforeAll(async () => {
-  program = await compile(NodeHost, libEntrypoint, { noEmit: true });
+  program = await compile(NodeHost, mainEntrypoint, { noEmit: true });
   const errors = program.diagnostics.filter((d) => d.severity === "error");
   if (errors.length > 0) {
-    throw new Error(`Kessel library compilation failed:\n${errors.map((d) => d.message).join("\n")}`);
+    throw new Error(`Schema compilation failed:\n${errors.map((d) => d.message).join("\n")}`);
   }
 }, 30_000);
 
 describe("Registry-TSP contract", () => {
-  it("every EXTENSION_TEMPLATES entry exists as a model in the Kessel namespace", () => {
-    for (const def of EXTENSION_TEMPLATES) {
+  it("every registry template exists as a model in the expected namespace", () => {
+    for (const def of ALL_TEMPLATES) {
       const model = findExtensionTemplate(program, def.templateName, def.namespace);
       expect(model, `Template "${def.templateName}" not found in compiled program`).not.toBeNull();
       const fqn = getNamespaceFQN(model!.namespace);
@@ -33,7 +36,7 @@ describe("Registry-TSP contract", () => {
   });
 
   it("every paramName in the registry matches a property on the TSP model", () => {
-    for (const def of EXTENSION_TEMPLATES) {
+    for (const def of ALL_TEMPLATES) {
       const model = findExtensionTemplate(program, def.templateName, def.namespace) as Model;
       expect(model).not.toBeNull();
 
@@ -47,17 +50,27 @@ describe("Registry-TSP contract", () => {
     }
   });
 
-  it("VALID_VERBS matches KesselVerb members from kessel-extensions.tsp", () => {
-    // KesselVerb is `alias KesselVerb = "read" | "write" | "create" | "delete"`.
-    // Since it's an alias of a union of string literals, we verify against our
-    // known constant. If KesselVerb changes in the .tsp, this test forces
-    // VALID_VERBS to be updated.
+  it("RBAC provider's valid verbs matches expected set", async () => {
+    const { VALID_VERBS } = await import("../../providers/rbac/rbac-provider.js");
     const expectedVerbs = new Set(["read", "write", "create", "delete"]);
     expect(VALID_VERBS).toEqual(expectedVerbs);
   });
 
+  it("warns on duplicate template names across providers", () => {
+    const dupProvider = {
+      id: "dup",
+      templates: [{ templateName: "V1WorkspacePermission", paramNames: ["application", "resource", "verb", "v2Perm"], namespace: "Kessel" }],
+      discover: () => [],
+      expand: (r: any) => ({ resources: r, warnings: [] }),
+    };
+    const { warnings } = buildRegistry([rbacProvider, dupProvider]);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("Duplicate template");
+    expect(warnings[0]).toContain("V1WorkspacePermission");
+  });
+
   it("no extra properties on TSP models that are missing from registry paramNames", () => {
-    for (const def of EXTENSION_TEMPLATES) {
+    for (const def of ALL_TEMPLATES) {
       const model = findExtensionTemplate(program, def.templateName, def.namespace) as Model;
       expect(model).not.toBeNull();
 

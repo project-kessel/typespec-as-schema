@@ -1,8 +1,10 @@
-// Kessel Schema Emitter
-// Single entry point: compiles TypeSpec, discovers resources and permissions,
-// validates safety constraints, expands V1 permissions, and emits the requested output format.
+// Kessel Schema Emitter — CLI Composition Root
 //
-// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--unified-jsonschema] [--preview <v2perm>] [--annotations] [--no-strict] [--emit-jsonschema] [--watch]
+// This is the only file that knows which providers are active. It wires
+// providers into the generic pipeline and handles CLI output formatting.
+// The pipeline itself (pipeline.ts) is provider-neutral.
+//
+// Usage: npx tsx src/spicedb-emitter.ts [schema/main.tsp] [--metadata] [--ir [outpath]] [--unified-jsonschema] [--preview <perm>] [--annotations] [--no-strict] [--emit-jsonschema] [--watch]
 
 import * as fs from "fs";
 import * as path from "path";
@@ -14,27 +16,50 @@ import {
 import { bodyToZed, slotName, flattenAnnotations, findResource, isAssignable } from "./utils.js";
 import { validateOutputSize } from "./safety.js";
 import { compilePipeline } from "./pipeline.js";
+import type { ExtensionProvider } from "./provider.js";
+import { rbacProvider } from "../providers/rbac/rbac-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const DEFAULT_PROVIDERS: ExtensionProvider[] = [rbacProvider];
 
 async function runOnce(args: string[], resolvedMain: string): Promise<void> {
   const emitJsonSchema = args.includes("--emit-jsonschema");
 
   console.error(`Compiling ${resolvedMain}...`);
 
-  const result = await compilePipeline(resolvedMain, { emitJsonSchema });
+  const providers = DEFAULT_PROVIDERS;
+
+  const result = await compilePipeline(resolvedMain, { providers, emitJsonSchema });
   const {
-    extensions: permissions,
+    providerResults,
+    providerMap,
     annotations,
     cascadePolicies,
     fullSchema,
+    preExpansionDiagnostics,
     diagnostics,
     warnings,
     resources,
+    ownedNamespaces,
   } = result;
+
+  const allExtensions = providerResults.flatMap((pr) => pr.discovered);
+  const isStrict = !args.includes("--no-strict");
 
   for (const w of warnings) {
     console.error(`Warning: ${w}`);
+  }
+
+  if (preExpansionDiagnostics.length > 0) {
+    console.error(`\n⚠ Pre-expansion validation found ${preExpansionDiagnostics.length} issue(s):`);
+    for (const d of preExpansionDiagnostics) {
+      console.error(`  ${d.resource}.${d.relation}: ${d.message}`);
+    }
+    console.error("");
+    if (isStrict) {
+      throw new Error("Pre-expansion validation failed");
+    }
   }
 
   if (diagnostics.length > 0) {
@@ -43,81 +68,71 @@ async function runOnce(args: string[], resolvedMain: string): Promise<void> {
       console.error(`  ${d.resource}.${d.relation}: ${d.message}`);
     }
     console.error("");
-    if (!args.includes("--no-strict")) {
+    if (isStrict) {
       throw new Error("Permission expression validation failed");
     }
   }
 
   console.error(
-    `Discovered ${resources.length} resources, ${permissions.length} V1 extensions, expanded to ${fullSchema.length} resource defs.`,
+    `Discovered ${resources.length} resources, ${allExtensions.length} extensions, expanded to ${fullSchema.length} resource defs.`,
   );
 
   if (args.includes("--preview")) {
     const previewIdx = args.indexOf("--preview");
     const targetPerm = args[previewIdx + 1];
     if (!targetPerm || targetPerm.startsWith("--")) {
-      const available = permissions.map(p => `  ${p.v2Perm}  (${p.application}:${p.resource}:${p.verb})`).join("\n");
-      throw new Error(`Usage: --preview <v2_permission_name>\nAvailable permissions:\n${available}`);
+      const available = allExtensions
+        .map((e) => {
+          const parts = Object.entries(e.params).map(([k, v]) => `${k}=${v}`).join(", ");
+          return `  ${e.kind}: ${parts}`;
+        })
+        .join("\n");
+      throw new Error(`Usage: --preview <permission_name>\nAvailable extensions:\n${available}`);
     }
 
-    const ext = permissions.find((p) => p.v2Perm === targetPerm);
+    const ext = allExtensions.find((e) =>
+      Object.values(e.params).includes(targetPerm),
+    );
     if (!ext) {
-      console.error(`No extension found for v2 permission "${targetPerm}".`);
-      console.error("Available permissions:");
-      for (const p of permissions) {
-        console.error(`  ${p.v2Perm}  (${p.application}:${p.resource}:${p.verb})`);
+      console.error(`No extension found matching "${targetPerm}".`);
+      console.error("Available extensions:");
+      for (const e of allExtensions) {
+        const parts = Object.entries(e.params).map(([k, v]) => `${k}=${v}`).join(", ");
+        console.error(`  ${e.kind}: ${parts}`);
       }
-      throw new Error(`No extension found for v2 permission "${targetPerm}".`);
+      throw new Error(`No extension found matching "${targetPerm}".`);
     }
 
-    const { application: app, resource: res, verb, v2Perm: v2 } = ext;
-    console.log(`Preview: V1WorkspacePermission<"${app}", "${res}", "${verb}", "${v2}">`);
-    console.log(`Source: ${app}:${res}:${verb} → ${v2}\n`);
-    console.log("Mutations applied to RBAC types:\n");
+    console.log(`Preview: ${ext.kind}`);
+    console.log(`Parameters: ${JSON.stringify(ext.params, null, 2)}\n`);
 
-    console.log("  1. rbac/role — add bool relations:");
-    console.log(`       ${app}_any_any, ${app}_${res}_any, ${app}_any_${verb}, ${app}_${res}_${verb}`);
-
-    console.log(`\n  2. rbac/role — add computed permission:`);
-    console.log(`       permission ${v2} = any_any_any + ${app}_any_any + ${app}_${res}_any + ${app}_any_${verb} + ${app}_${res}_${verb}`);
-
-    console.log(`\n  3. rbac/role_binding — add intersection permission:`);
-    console.log(`       permission ${v2} = (subject & ${slotName("granted")}->${v2})`);
-
-    console.log(`\n  4. rbac/workspace — add union permission:`);
-    console.log(`       permission ${v2} = ${slotName("binding")}->${v2} + ${slotName("parent")}->${v2}`);
-
-    if (verb === "read") {
-      console.log(`\n  5. rbac/workspace — accumulate into view_metadata:`);
-      console.log(`       permission view_metadata = ... + ${v2}`);
+    console.log("Expanded SpiceDB for affected resources:\n");
+    for (const ns of ownedNamespaces) {
+      const nsResources = fullSchema.filter((r) => r.namespace === ns);
+      for (const resourceDef of nsResources) {
+        const matching = resourceDef.relations.filter((r) =>
+          Object.values(ext.params).some((v) => r.name === v),
+        );
+        if (matching.length > 0) {
+          console.log(`  ${resourceDef.namespace}/${resourceDef.name}:`);
+          for (const rel of matching) {
+            if (isAssignable(rel.body)) {
+              console.log(`    relation ${slotName(rel.name)}: ${bodyToZed(rel.body)}`);
+              console.log(`    permission ${rel.name} = ${slotName(rel.name)}`);
+            } else {
+              console.log(`    permission ${rel.name} = ${bodyToZed(rel.body)}`);
+            }
+          }
+        }
+      }
     }
 
     const matchingCascade = cascadePolicies.filter(
-      (p) => p.childApplication.toLowerCase() === app,
+      (p) => Object.values(ext.params).includes(p.childApplication),
     );
     for (const cp of matchingCascade) {
       console.log(`\n  + CascadeDeletePolicy: ${cp.childApplication}/${cp.childResource}`);
       console.log(`       permission delete = ${slotName(cp.parentRelation)}->delete`);
-    }
-
-    console.log(`\nExpanded SpiceDB for this permission:\n`);
-    const role = findResource(fullSchema, "rbac", "role");
-    const rb = findResource(fullSchema, "rbac", "role_binding");
-    const ws = findResource(fullSchema, "rbac", "workspace");
-    for (const [label, resourceDef] of [["rbac/role", role], ["rbac/role_binding", rb], ["rbac/workspace", ws]] as const) {
-      if (!resourceDef) continue;
-      const matching = resourceDef.relations.filter((r) => r.name === v2 || r.name === `${app}_${res}_${verb}` || r.name === `${app}_any_any` || r.name === `${app}_${res}_any` || r.name === `${app}_any_${verb}`);
-      if (matching.length > 0) {
-        console.log(`  ${label}:`);
-        for (const rel of matching) {
-          if (isAssignable(rel.body)) {
-            console.log(`    relation ${slotName(rel.name)}: ${bodyToZed(rel.body)}`);
-            console.log(`    permission ${rel.name} = ${slotName(rel.name)}`);
-          } else {
-            console.log(`    permission ${rel.name} = ${bodyToZed(rel.body)}`);
-          }
-        }
-      }
     }
   } else if (args.includes("--ir")) {
     const irIndex = args.indexOf("--ir");
@@ -125,7 +140,7 @@ async function runOnce(args: string[], resolvedMain: string): Promise<void> {
     const outPath = nextArg && !nextArg.startsWith("--")
       ? nextArg
       : path.resolve(__dirname, "../go-loader-example/schema/resources.json");
-    const ir = generateIR(resolvedMain, fullSchema, permissions, annotations, cascadePolicies);
+    const ir = generateIR(resolvedMain, fullSchema, providerResults, providerMap, ownedNamespaces, annotations, cascadePolicies);
     const irJson = JSON.stringify(ir, null, 2) + "\n";
     const sizeCheck = validateOutputSize(irJson);
     if (sizeCheck.warning) console.error(`⚠ ${sizeCheck.warning}`);
@@ -133,7 +148,7 @@ async function runOnce(args: string[], resolvedMain: string): Promise<void> {
     fs.writeFileSync(outPath, irJson);
     console.error(`Wrote IR to ${outPath}`);
   } else if (args.includes("--metadata")) {
-    console.log(JSON.stringify(generateMetadata(fullSchema, permissions, annotations, cascadePolicies), null, 2));
+    console.log(JSON.stringify(generateMetadata(fullSchema, providerResults, providerMap, ownedNamespaces, annotations, cascadePolicies), null, 2));
   } else if (args.includes("--unified-jsonschema")) {
     console.log(JSON.stringify(result.unifiedJsonSchemas, null, 2));
   } else if (args.includes("--annotations")) {
@@ -150,16 +165,29 @@ function startWatch(args: string[], resolvedMain: string): void {
   const projectRoot = path.dirname(resolvedMain);
   const watchDirs = [
     path.resolve(projectRoot, "../lib"),
+    path.resolve(projectRoot, "../providers"),
     projectRoot,
   ].filter((d) => fs.existsSync(d));
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let nullFilenameWarned = false;
   const DEBOUNCE_MS = 300;
 
-  function onFileChange(eventType: string, filename: string | null): void {
-    if (filename && !filename.endsWith(".tsp")) return;
+  function onFileChange(_eventType: string, filename: string | null): void {
+    if (filename === null) {
+      if (!nullFilenameWarned) {
+        console.error("Note: platform does not report filenames in watch events; all changes trigger recompilation.");
+        nullFilenameWarned = true;
+      }
+    } else if (!filename.endsWith(".tsp")) {
+      return;
+    }
+
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
+      if (running) return;
+      running = true;
       const ts = new Date().toLocaleTimeString();
       console.error(`\n[${ts}] File change detected${filename ? `: ${filename}` : ""}, recompiling...`);
       try {
@@ -167,14 +195,22 @@ function startWatch(args: string[], resolvedMain: string): void {
         console.error(`[${new Date().toLocaleTimeString()}] Done.`);
       } catch (err) {
         console.error(`[${new Date().toLocaleTimeString()}] Error:`, err instanceof Error ? err.message : err);
+      } finally {
+        running = false;
       }
     }, DEBOUNCE_MS);
   }
 
+  const watchers: fs.FSWatcher[] = [];
   for (const dir of watchDirs) {
-    fs.watch(dir, { recursive: true }, onFileChange);
+    watchers.push(fs.watch(dir, { recursive: true }, onFileChange));
     console.error(`Watching ${dir} for .tsp changes...`);
   }
+
+  process.on("SIGINT", () => {
+    for (const w of watchers) w.close();
+    process.exit(0);
+  });
 }
 
 async function main() {

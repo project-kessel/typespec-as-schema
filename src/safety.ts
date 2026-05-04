@@ -1,24 +1,23 @@
 // Schema Safety Guards
 //
-// Defense-in-depth for schema compilation. TypeSpec's architecture provides
-// structural safety (service authors write zero computation — only type
-// declarations and alias instantiations), but these guards add runtime
-// protection against edge cases in platform-owned expansion code.
-//
-// Design principle: prevent problems, don't just detect them.
-// Each guard runs before or immediately after a pipeline stage,
-// failing fast with actionable diagnostics.
+// Defense-in-depth for schema compilation. Service authors write zero
+// computation (only type declarations and alias instantiations). Providers
+// ship reviewed expansion code with declared cost budgets. These guards
+// enforce per-provider budgets and catch edge cases in expansion code.
 
-import type { V1Extension, ResourceDef } from "./types.js";
+import type { ResourceDef } from "./types.js";
+import type { DiscoveredExtension, ExtensionProvider } from "./provider.js";
 import { slotName } from "./utils.js";
 
 // ─── Configuration ──────────────────────────────────────────────────
 
 export interface SafetyLimits {
-  /** Maximum number of V1 extensions before expansion is rejected. */
-  maxExtensions: number;
+  /** Maximum total weighted cost before expansion is rejected. */
+  maxExpansionCost: number;
   /** Maximum wall-clock milliseconds for expansion. */
   expansionTimeoutMs: number;
+  /** Maximum wall-clock milliseconds for a single provider's discover() call. */
+  discoveryTimeoutMs: number;
   /** SpiceDB output size warning threshold in bytes. */
   outputWarnBytes: number;
   /** SpiceDB output size error threshold in bytes. */
@@ -26,8 +25,9 @@ export interface SafetyLimits {
 }
 
 export const DEFAULT_LIMITS: Readonly<SafetyLimits> = {
-  maxExtensions: 500,
+  maxExpansionCost: 500,
   expansionTimeoutMs: 10_000,
+  discoveryTimeoutMs: 10_000,
   outputWarnBytes: 100 * 1024,
   outputMaxBytes: 1024 * 1024,
 };
@@ -36,28 +36,34 @@ export const DEFAULT_LIMITS: Readonly<SafetyLimits> = {
 
 export class SchemaComplexityError extends Error {
   constructor(
+    public readonly providerId: string,
     public readonly extensionCount: number,
+    public readonly totalCost: number,
     public readonly limit: number,
   ) {
     super(
-      `Schema complexity exceeded: ${extensionCount} extensions discovered, ` +
-      `limit is ${limit}. Each extension generates 7 mutations on RBAC types. ` +
-      `Reduce the number of V1WorkspacePermission aliases or raise the limit.`,
+      `Schema complexity exceeded for provider "${providerId}": ` +
+      `${extensionCount} extensions with total cost ${totalCost}, ` +
+      `limit is ${limit}. ` +
+      `Reduce the number of extension aliases or raise the limit.`,
     );
     this.name = "SchemaComplexityError";
   }
 }
 
 /**
- * Validates extension count before expansion runs.
- * Fails fast with a clear error rather than letting expansion run unbounded.
+ * Validates extension count and weighted cost for a single provider.
+ * costPerInstance defaults to 1 if not specified by the provider.
  */
-export function validateComplexityBudget(
-  extensions: V1Extension[],
+export function validateProviderComplexityBudget(
+  discovered: DiscoveredExtension[],
+  provider: ExtensionProvider,
   limits: SafetyLimits = DEFAULT_LIMITS,
 ): void {
-  if (extensions.length > limits.maxExtensions) {
-    throw new SchemaComplexityError(extensions.length, limits.maxExtensions);
+  const cost = provider.costPerInstance ?? 1;
+  const totalCost = discovered.length * cost;
+  if (totalCost > limits.maxExpansionCost) {
+    throw new SchemaComplexityError(provider.id, discovered.length, totalCost, limits.maxExpansionCost);
   }
 }
 
@@ -67,17 +73,29 @@ export class ExpansionTimeoutError extends Error {
   constructor(public readonly elapsedMs: number, public readonly limitMs: number) {
     super(
       `Expansion exceeded ${limitMs}ms timeout (ran for ${elapsedMs}ms). ` +
-      `This may indicate a bug in expansion logic. ` +
+      `This may indicate a bug in provider expansion logic. ` +
       `The schema has not been modified.`,
     );
     this.name = "ExpansionTimeoutError";
   }
 }
 
+export class DiscoveryTimeoutError extends Error {
+  constructor(
+    public readonly providerId: string,
+    public readonly elapsedMs: number,
+    public readonly limitMs: number,
+  ) {
+    super(
+      `Discovery for provider "${providerId}" exceeded ${limitMs}ms timeout ` +
+      `(ran for ${elapsedMs}ms). This may indicate a bug in provider discovery logic.`,
+    );
+    this.name = "DiscoveryTimeoutError";
+  }
+}
+
 /**
- * @deprecated Inlined into `compilePipeline`. Kept for backward compatibility
- * with external consumers. Prefer using `compilePipeline` with `PipelineOptions`
- * to configure safety limits.
+ * @deprecated Inlined into `compilePipeline`. Kept for backward compatibility.
  */
 export function withExpansionTimeout<T>(
   fn: () => T,
@@ -112,10 +130,6 @@ export class OutputSizeError extends Error {
   }
 }
 
-/**
- * Validates generated output size. Returns a warning string if the output
- * is large but within limits, or throws if it exceeds the hard limit.
- */
 export function validateOutputSize(
   output: string,
   limits: SafetyLimits = DEFAULT_LIMITS,
@@ -138,10 +152,9 @@ export function validateOutputSize(
 
 /**
  * Validates permission expressions before expansion runs. Checks that
- * subrefs (e.g., "workspace.inventory_host_view") have a valid left-hand
- * side — the local assignable relation must exist on the same resource.
- * Right-hand side validation is deferred to post-expansion because RBAC
- * mutations haven't been applied yet.
+ * subrefs have a valid left-hand side. Right-hand side validation is
+ * deferred to post-expansion because provider mutations haven't been
+ * applied yet.
  */
 export function validatePreExpansionExpressions(
   resources: ResourceDef[],
@@ -216,17 +229,11 @@ export interface ValidationDiagnostic {
   message: string;
 }
 
-/**
- * Validates that all permission expressions reference relations that exist
- * in the expanded schema. Catches typos and stale references that TypeSpec's
- * type checker cannot see (Permission<"expr"> strings are opaque to it).
- */
 export function validatePermissionExpressions(
   resources: ResourceDef[],
 ): ValidationDiagnostic[] {
   const diagnostics: ValidationDiagnostic[] = [];
 
-  // Build an index of all known relation and permission names per resource
   const relationIndex = new Map<string, Set<string>>();
   for (const res of resources) {
     const key = `${res.namespace}/${res.name}`;
@@ -237,7 +244,6 @@ export function validatePermissionExpressions(
     relationIndex.set(key, names);
   }
 
-  // Collect all relation names across all resources (flat set for subref targets)
   const allRelationNames = new Set<string>();
   for (const res of resources) {
     for (const rel of res.relations) {
@@ -246,8 +252,6 @@ export function validatePermissionExpressions(
     }
   }
 
-  // Map local relation names to their target types for subref resolution.
-  // Key: "resourceKey.t_relName", Value: target type key (e.g., "rbac/workspace")
   const targetTypeMap = new Map<string, string>();
   for (const res of resources) {
     const rk = `${res.namespace}/${res.name}`;
@@ -293,7 +297,6 @@ function validateBody(
       break;
 
     case "subref": {
-      // The left side (e.g., t_workspace) should be a local relation
       if (!localNames.has(body.name)) {
         diagnostics.push({
           resource: resourceKey,
@@ -303,7 +306,6 @@ function validateBody(
         });
         break;
       }
-      // Resolve the target type and check the right-hand side against it
       const targetType = targetTypeMap.get(`${resourceKey}.${body.name}`);
       if (targetType) {
         const targetNames = relationIndex.get(targetType);
@@ -315,7 +317,6 @@ function validateBody(
             message: `"${body.subname}" does not exist on target type "${targetType}" (referenced via ${body.name} in ${resourceKey}.${relationName})`,
           });
         }
-        // If targetType is not in relationIndex, it's an external/platform type -- skip
       } else if (!allNames.has(body.subname)) {
         diagnostics.push({
           resource: resourceKey,
@@ -334,7 +335,6 @@ function validateBody(
       }
       break;
 
-    // assignable and bool are always valid (they define, not reference)
     case "assignable":
     case "bool":
       break;

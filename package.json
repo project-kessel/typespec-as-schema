@@ -2,7 +2,7 @@
   "name": "typespec-as-schema",
   "version": "1.0.0",
   "type": "module",
-  "tspMain": "lib/kessel-extensions.tsp",
+  "tspMain": "lib/kessel.tsp",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",

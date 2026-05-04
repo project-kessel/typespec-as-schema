@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  validateComplexityBudget,
+  validateProviderComplexityBudget,
   withExpansionTimeout,
   validateOutputSize,
   validatePermissionExpressions,
@@ -8,49 +8,64 @@ import {
   OutputSizeError,
   DEFAULT_LIMITS,
 } from "../../src/safety.js";
-import { slotName, type V1Extension, type ResourceDef } from "../../src/lib.js";
+import { slotName, type ResourceDef } from "../../src/lib.js";
+import type { DiscoveredExtension, ExtensionProvider } from "../../src/provider.js";
+
+function mockProvider(overrides?: Partial<ExtensionProvider>): ExtensionProvider {
+  return {
+    id: "test",
+    templates: [],
+    discover: () => [],
+    expand: () => ({ resources: [], warnings: [] }),
+    costPerInstance: 1,
+    ...overrides,
+  };
+}
+
+function makeDiscovered(count: number): DiscoveredExtension[] {
+  return Array.from({ length: count }, (_, i) => ({
+    kind: "TestExtension",
+    params: { application: `app${i}`, resource: "res", verb: "read", v2Perm: `app${i}_res_view` },
+  }));
+}
 
 // ─── Complexity Budget ──────────────────────────────────────────────
 
-describe("validateComplexityBudget", () => {
+describe("validateProviderComplexityBudget", () => {
   it("passes when extension count is within limit", () => {
-    const extensions: V1Extension[] = [
-      { application: "a", resource: "b", verb: "read", v2Perm: "a_b_view" },
-    ];
-    expect(() => validateComplexityBudget(extensions)).not.toThrow();
+    const discovered = makeDiscovered(1);
+    expect(() => validateProviderComplexityBudget(discovered, mockProvider())).not.toThrow();
   });
 
   it("passes with zero extensions", () => {
-    expect(() => validateComplexityBudget([])).not.toThrow();
+    expect(() => validateProviderComplexityBudget([], mockProvider())).not.toThrow();
   });
 
   it("throws SchemaComplexityError when limit exceeded", () => {
-    const extensions: V1Extension[] = Array.from({ length: 3 }, (_, i) => ({
-      application: `app${i}`,
-      resource: "res",
-      verb: "read",
-      v2Perm: `app${i}_res_view`,
-    }));
-    const limits = { ...DEFAULT_LIMITS, maxExtensions: 2 };
-    expect(() => validateComplexityBudget(extensions, limits)).toThrow(SchemaComplexityError);
+    const discovered = makeDiscovered(3);
+    const limits = { ...DEFAULT_LIMITS, maxExpansionCost: 2 };
+    expect(() => validateProviderComplexityBudget(discovered, mockProvider(), limits)).toThrow(SchemaComplexityError);
   });
 
-  it("error message includes counts", () => {
-    expect.assertions(3);
-    const extensions: V1Extension[] = Array.from({ length: 5 }, (_, i) => ({
-      application: `app${i}`,
-      resource: "res",
-      verb: "read",
-      v2Perm: `app${i}_res_view`,
-    }));
-    const limits = { ...DEFAULT_LIMITS, maxExtensions: 3 };
+  it("error message includes counts and providerId", () => {
+    expect.assertions(4);
+    const discovered = makeDiscovered(5);
+    const limits = { ...DEFAULT_LIMITS, maxExpansionCost: 3 };
     try {
-      validateComplexityBudget(extensions, limits);
+      validateProviderComplexityBudget(discovered, mockProvider(), limits);
     } catch (e) {
       expect(e).toBeInstanceOf(SchemaComplexityError);
+      expect((e as SchemaComplexityError).providerId).toBe("test");
       expect((e as SchemaComplexityError).extensionCount).toBe(5);
       expect((e as SchemaComplexityError).limit).toBe(3);
     }
+  });
+
+  it("respects costPerInstance on the provider", () => {
+    const discovered = makeDiscovered(2);
+    const provider = mockProvider({ costPerInstance: 5 });
+    const limits = { ...DEFAULT_LIMITS, maxExpansionCost: 9 };
+    expect(() => validateProviderComplexityBudget(discovered, provider, limits)).toThrow(SchemaComplexityError);
   });
 });
 

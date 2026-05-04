@@ -5,7 +5,8 @@
 import "@typespec/json-schema";
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
-import "./rbac.tsp";
+import "../providers/rbac/rbac-extensions.tsp";
+import "../providers/rbac/rbac.tsp";
 
 using JsonSchema;
 using Kessel;
@@ -13,8 +14,8 @@ using Kessel;
 namespace Inventory;
 
 // ─── Extension Applications ──────────────────────────────────────────
-// Patch rules live on Kessel.V1WorkspacePermission (../lib/kessel-extensions.tsp);
-// the generic emitter applies them to Role, RoleBinding, and Workspace.
+// V1WorkspacePermission is owned by the RBAC provider (../providers/rbac/).
+// Services import the RBAC extension template to register permissions.
 
 /** Maps inventory:hosts:read → inventory_host_view on workspace */
 alias viewPermission = Kessel.V1WorkspacePermission<

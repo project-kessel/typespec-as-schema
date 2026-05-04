@@ -5,7 +5,8 @@
 
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
-import "./rbac.tsp";
+import "../providers/rbac/rbac-extensions.tsp";
+import "../providers/rbac/rbac.tsp";
 
 using Kessel;
 

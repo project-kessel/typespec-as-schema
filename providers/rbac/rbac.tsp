@@ -1,8 +1,13 @@
 // RBAC Service Schema
-// Defines core RBAC resource types and the workspace permission extension pattern.
-// This is an internal/platform service that other services extend.
+//
+// Defines core RBAC resource types: Principal, Role, RoleBinding, Workspace.
+// This is a service provider schema — RBAC owns these types and the
+// expansion logic that wires V1 permissions through them.
+//
+// Other services import this file to reference RBAC types (e.g., Workspace
+// in assignable relations).
 
-import "../lib/kessel.tsp";
+import "../../lib/kessel.tsp";
 
 using Kessel;
 
@@ -38,6 +43,3 @@ model Workspace {
   /** Role bindings granting access to this workspace */
   binding: Assignable<RoleBinding, Cardinality.Any>;
 }
-
-// Service extensions: use Kessel.V1WorkspacePermission from ../lib/kessel-extensions.tsp
-// (declarative patch rules; generic emitter applies patches to this schema).

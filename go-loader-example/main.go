@@ -43,9 +43,16 @@ func printResources(ir *schema.IntermediateRepresentation) {
 }
 
 func printExtensions(ir *schema.IntermediateRepresentation) {
-	fmt.Printf("=== V1 Extensions (%d) ===\n", len(ir.Extensions))
-	for _, ext := range ir.Extensions {
-		fmt.Printf("  %s:%s:%s -> %s\n", ext.Application, ext.Resource, ext.Verb, ext.V2Perm)
+	total := 0
+	for _, exts := range ir.Extensions {
+		total += len(exts)
+	}
+	fmt.Printf("=== Extensions (%d across %d providers) ===\n", total, len(ir.Extensions))
+	for provider, exts := range ir.Extensions {
+		fmt.Printf("  [%s] (%d)\n", provider, len(exts))
+		for _, ext := range exts {
+			fmt.Printf("    %s:%s:%s -> %s\n", ext.Application, ext.Resource, ext.Verb, ext.V2Perm)
+		}
 	}
 	fmt.Println()
 }

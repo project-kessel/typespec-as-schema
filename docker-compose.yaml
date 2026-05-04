@@ -1,0 +1,19 @@
+services:
+  spicedb:
+    image: authzed/spicedb:latest
+    command: >
+      serve
+      --grpc-preshared-key "somerandomkeyhere"
+      --datastore-engine memory
+      --http-enabled
+      --http-addr :8443
+    ports:
+      - "50051:50051"   # gRPC
+      - "8443:8443"     # HTTP gateway
+      - "9090:9090"     # metrics
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s

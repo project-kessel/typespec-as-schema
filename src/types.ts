@@ -19,15 +19,6 @@ export interface ResourceDef {
   relations: RelationDef[];
 }
 
-export type KesselVerb = "read" | "write" | "create" | "delete";
-
-export interface V1Extension {
-  application: string;
-  resource: string;
-  verb: KesselVerb;
-  v2Perm: string;
-}
-
 export interface UnifiedJsonSchema {
   $schema: string;
   $id: string;
@@ -47,12 +38,6 @@ export interface AnnotationEntry {
   value: string;
 }
 
-export interface RBACScaffold {
-  role: ResourceDef;
-  roleBinding: ResourceDef;
-  workspace: ResourceDef;
-}
-
 export interface ServiceMetadata {
   permissions: string[];
   resources: string[];
@@ -60,12 +45,21 @@ export interface ServiceMetadata {
   annotations?: Record<string, string>;
 }
 
+import type { DiscoveredExtension } from "./provider.js";
+
+export interface ProviderDiscoveryResult {
+  providerId: string;
+  discovered: DiscoveredExtension[];
+}
+
+export type ExtensionParams = Record<string, string>;
+
 export interface IntermediateRepresentation {
   version: string;
   generatedAt: string;
   source: string;
   resources: ResourceDef[];
-  extensions: V1Extension[];
+  extensions: Record<string, ExtensionParams[]>;
   spicedb: string;
   metadata: Record<string, ServiceMetadata>;
   jsonSchemas: Record<string, UnifiedJsonSchema>;

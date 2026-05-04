@@ -1,13 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { generateMetadata, type ResourceDef, type V1Extension } from "../../src/lib.js";
+import { generateMetadata, type ResourceDef, type ExtensionProvider } from "../../src/lib.js";
+import type { ProviderDiscoveryResult } from "../../src/pipeline.js";
+
+const mockRbacProvider: ExtensionProvider = {
+  id: "rbac",
+  templates: [],
+  discover: () => [],
+  expand: (r) => ({ resources: r, warnings: [] }),
+  applicationParamKey: "application",
+  permissionParamKey: "v2Perm",
+};
+
+const defaultProviderMap = new Map<string, ExtensionProvider>([["rbac", mockRbacProvider]]);
+
+function wrapAsProviderResults(...discovered: { application: string; resource: string; verb: string; v2Perm: string }[]): ProviderDiscoveryResult[] {
+  return [{
+    providerId: "rbac",
+    discovered: discovered.map((d) => ({
+      kind: "V1WorkspacePermission",
+      params: d,
+    })),
+  }];
+}
 
 describe("generateMetadata", () => {
-  const inventoryExtensions: V1Extension[] = [
+  const inventoryDiscovered = [
     { application: "inventory", resource: "hosts", verb: "read", v2Perm: "inventory_host_view" },
     { application: "inventory", resource: "hosts", verb: "write", v2Perm: "inventory_host_update" },
   ];
 
-  const remediationsExtensions: V1Extension[] = [
+  const remediationsDiscovered = [
     { application: "remediations", resource: "remediations", verb: "read", v2Perm: "remediations_remediation_view" },
     { application: "remediations", resource: "remediations", verb: "write", v2Perm: "remediations_remediation_update" },
   ];
@@ -21,8 +43,8 @@ describe("generateMetadata", () => {
   };
 
   it("groups permissions by application", () => {
-    const extensions = [...inventoryExtensions, ...remediationsExtensions];
-    const metadata = generateMetadata([], extensions);
+    const providerResults = wrapAsProviderResults(...inventoryDiscovered, ...remediationsDiscovered);
+    const metadata = generateMetadata([], providerResults, defaultProviderMap);
 
     expect(metadata.inventory.permissions).toEqual([
       "inventory_host_view",
@@ -35,7 +57,8 @@ describe("generateMetadata", () => {
   });
 
   it("includes resource names for non-RBAC resources", () => {
-    const metadata = generateMetadata([inventoryResource], inventoryExtensions);
+    const providerResults = wrapAsProviderResults(...inventoryDiscovered);
+    const metadata = generateMetadata([inventoryResource], providerResults, defaultProviderMap);
     expect(metadata.inventory.resources).toContain("host");
   });
 
@@ -45,18 +68,20 @@ describe("generateMetadata", () => {
       namespace: "rbac",
       relations: [],
     };
-    const metadata = generateMetadata([rbacResource, inventoryResource], inventoryExtensions);
+    const providerResults = wrapAsProviderResults(...inventoryDiscovered);
+    const metadata = generateMetadata([rbacResource, inventoryResource], providerResults, defaultProviderMap, new Set(["rbac"]));
     expect(metadata.rbac).toBeUndefined();
   });
 
   it("permissions-only service has empty resources array", () => {
-    const metadata = generateMetadata([], remediationsExtensions);
+    const providerResults = wrapAsProviderResults(...remediationsDiscovered);
+    const metadata = generateMetadata([], providerResults, defaultProviderMap);
     expect(metadata.remediations.resources).toEqual([]);
   });
 
   it("produces the expected benchmark metadata structure", () => {
-    const extensions = [...inventoryExtensions, ...remediationsExtensions];
-    const metadata = generateMetadata([inventoryResource], extensions);
+    const providerResults = wrapAsProviderResults(...inventoryDiscovered, ...remediationsDiscovered);
+    const metadata = generateMetadata([inventoryResource], providerResults, defaultProviderMap);
 
     expect(metadata).toEqual({
       inventory: {

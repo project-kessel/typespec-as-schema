@@ -6,7 +6,7 @@
 #   3. go-build      — Go binary with embedded IR
 #
 # Layout: schema/ = adopter modules + main.tsp | lib/ = platform .tsp | src/ = interpreter (TS)
-# Evaluators: `make demo` or `make run` → SpiceDB + metadata + unified JSON Schema on stdout.
+# Evaluators: `make demo` or `make run` → all 5 output modes on stdout.
 # `make samples` → refresh samples/demo-output.txt
 # Go consumer: `make run-consumer` (no Node at runtime for the binary).
 
@@ -36,15 +36,20 @@ go-build:
 
 # End-to-end console tour for reviewers (matches ts-as-schema POC pattern)
 demo:
-	@echo "=== SpiceDB / Zed (first 100 lines) =================================="
-	@$(TSX) $(EMITTER) $(MAIN_TSP) 2>/dev/null | head -n 100
+	@echo "=== SpiceDB / Zed ======================================================"
+	@$(TSX) $(EMITTER) $(MAIN_TSP) 2>/dev/null
 	@echo ""
-	@echo "=== Service metadata (JSON) ========================================="
+	@echo "=== Service metadata (JSON) ============================================"
 	@$(TSX) $(EMITTER) $(MAIN_TSP) --metadata 2>/dev/null
 	@echo ""
-	@echo "=== Unified JSON Schema (first 3500 chars; full: --unified-jsonschema) =="
-	@$(TSX) $(EMITTER) $(MAIN_TSP) --unified-jsonschema 2>/dev/null | head -c 3500
+	@echo "=== Unified JSON Schema ================================================"
+	@$(TSX) $(EMITTER) $(MAIN_TSP) --unified-jsonschema 2>/dev/null
 	@echo ""
+	@echo "=== Annotations ========================================================"
+	@$(TSX) $(EMITTER) $(MAIN_TSP) --annotations 2>/dev/null
+	@echo ""
+	@echo "=== Preview: inventory_host_view ========================================"
+	@$(TSX) $(EMITTER) $(MAIN_TSP) --preview inventory_host_view 2>/dev/null
 	@echo ""
 
 # Alias for evaluators (plan: make run / make demo)

@@ -4,16 +4,19 @@ import { fileURLToPath } from "url";
 import * as fs from "fs";
 import * as os from "os";
 import { compile, NodeHost, type Program } from "@typespec/compiler";
-import { findExtensionTemplate, discoverV1Permissions, discoverResources } from "../../src/discover.js";
+import { findExtensionTemplate } from "../../src/discover-extensions.js";
+import { discoverResources } from "../../src/discover-resources.js";
+import { discoverV1Permissions } from "../../providers/rbac/rbac-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const libDir = path.resolve(__dirname, "../../lib");
+const rbacExtDir = path.resolve(__dirname, "../../providers/rbac");
 
 async function compileInlineWithLib(tspSource: string): Promise<Program> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "discover-test-"));
   const mainFile = path.join(tmpDir, "main.tsp");
 
-  const fullSource = `import "${libDir}/kessel-extensions.tsp";\n\n${tspSource}`;
+  const fullSource = `import "${libDir}/kessel-extensions.tsp";\nimport "${rbacExtDir}/rbac-extensions.tsp";\n\n${tspSource}`;
   fs.writeFileSync(mainFile, fullSource);
 
   const program = await compile(NodeHost, mainFile, { noEmit: true });

@@ -2,7 +2,6 @@ import * as path from "path";
 import {
   IR_VERSION,
   type ResourceDef,
-  type V1Extension,
   type UnifiedJsonSchema,
   type ServiceMetadata,
   type IntermediateRepresentation,
@@ -10,6 +9,8 @@ import {
   type AnnotationEntry,
 } from "./types.js";
 import { bodyToZed, slotName, flattenAnnotations, isAssignable } from "./utils.js";
+import type { ProviderDiscoveryResult } from "./types.js";
+import type { ExtensionProvider } from "./provider.js";
 
 export function generateSpiceDB(resources: ResourceDef[]): string {
   const lines: string[] = [];
@@ -44,13 +45,19 @@ export function generateSpiceDB(resources: ResourceDef[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Generates unified JSON schemas for resources, excluding provider-owned
+ * namespaces (e.g., "rbac") which are internal to their provider.
+ */
 export function generateUnifiedJsonSchemas(
   resources: ResourceDef[],
+  ownedNamespaces?: Set<string>,
 ): Record<string, UnifiedJsonSchema> {
   const schemas: Record<string, UnifiedJsonSchema> = {};
+  const skip = ownedNamespaces ?? new Set<string>();
 
   for (const res of resources) {
-    if (res.namespace === "rbac") continue;
+    if (skip.has(res.namespace)) continue;
 
     const schema: UnifiedJsonSchema = {
       $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -67,7 +74,6 @@ export function generateUnifiedJsonSchemas(
         rel.body.kind === "assignable" &&
         rel.body.cardinality === "ExactlyOne"
       ) {
-        // Kessel convention: all ExactlyOne assignable relations use UUID identifiers.
         const idField = `${rel.name}_id`;
         schema.properties[idField] = {
           type: "string",
@@ -87,13 +93,20 @@ export function generateUnifiedJsonSchemas(
   return schemas;
 }
 
+/**
+ * Generates service metadata from provider discovery results and resources.
+ * Param key mapping is driven by the provider interface — no hard-coded keys.
+ */
 export function generateMetadata(
   resources: ResourceDef[],
-  extensions: V1Extension[],
+  providerResults: ProviderDiscoveryResult[],
+  providerMap: ReadonlyMap<string, ExtensionProvider>,
+  ownedNamespaces?: Set<string>,
   annotations?: Map<string, AnnotationEntry[]>,
   cascadePolicies?: CascadeDeleteEntry[],
 ): Record<string, ServiceMetadata> {
   const metadata: Record<string, ServiceMetadata> = {};
+  const skip = ownedNamespaces ?? new Set<string>();
 
   function ensure(app: string): ServiceMetadata {
     if (!metadata[app]) {
@@ -102,12 +115,22 @@ export function generateMetadata(
     return metadata[app];
   }
 
-  for (const ext of extensions) {
-    ensure(ext.application).permissions.push(ext.v2Perm);
+  for (const pr of providerResults) {
+    const provider = providerMap.get(pr.providerId);
+    const appKey = provider?.applicationParamKey;
+    const permKey = provider?.permissionParamKey;
+    if (!appKey || !permKey) continue;
+    for (const ext of pr.discovered) {
+      const app = ext.params[appKey];
+      const perm = ext.params[permKey];
+      if (app && perm) {
+        ensure(app).permissions.push(perm);
+      }
+    }
   }
 
   for (const res of resources) {
-    if (res.namespace === "rbac") continue;
+    if (skip.has(res.namespace)) continue;
     const ns = res.namespace.split("/").pop() || res.namespace;
     ensure(ns).resources.push(res.name);
   }
@@ -137,19 +160,26 @@ export function generateMetadata(
 export function generateIR(
   mainFile: string,
   fullSchema: ResourceDef[],
-  extensions: V1Extension[],
+  providerResults: ProviderDiscoveryResult[],
+  providerMap: ReadonlyMap<string, ExtensionProvider>,
+  ownedNamespaces?: Set<string>,
   annotations?: Map<string, AnnotationEntry[]>,
   cascadePolicies?: CascadeDeleteEntry[],
 ): IntermediateRepresentation {
+  const extensionsByProvider: Record<string, Record<string, string>[]> = {};
+  for (const pr of providerResults) {
+    extensionsByProvider[pr.providerId] = pr.discovered.map((d) => d.params);
+  }
+
   const ir: IntermediateRepresentation = {
     version: IR_VERSION,
     generatedAt: new Date().toISOString(),
     source: `schema/${path.basename(mainFile)}`,
     resources: fullSchema,
-    extensions,
+    extensions: extensionsByProvider,
     spicedb: generateSpiceDB(fullSchema),
-    metadata: generateMetadata(fullSchema, extensions, annotations, cascadePolicies),
-    jsonSchemas: generateUnifiedJsonSchemas(fullSchema),
+    metadata: generateMetadata(fullSchema, providerResults, providerMap, ownedNamespaces, annotations, cascadePolicies),
+    jsonSchemas: generateUnifiedJsonSchemas(fullSchema, ownedNamespaces),
   };
 
   if (annotations && annotations.size > 0) {

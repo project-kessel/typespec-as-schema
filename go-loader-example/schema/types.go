@@ -8,7 +8,7 @@ type IntermediateRepresentation struct {
 	GeneratedAt string                                `json:"generatedAt"`
 	Source      string                                `json:"source"`
 	Resources   []ResourceDef                         `json:"resources"`
-	Extensions  []V1Extension                         `json:"extensions"`
+	Extensions  map[string][]V1Extension               `json:"extensions"`
 	SpiceDB     string                                `json:"spicedb"`
 	Metadata    map[string]ServiceMetadata             `json:"metadata"`
 	JSONSchemas map[string]UnifiedJSONSchema           `json:"jsonSchemas"`
