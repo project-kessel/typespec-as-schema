@@ -63,8 +63,6 @@ function modelToResource(
   let hasRelations = false;
 
   for (const [name, prop] of model.properties) {
-    if (name === "data") continue;
-
     const propType = prop.type;
     if (propType.kind !== "Model") continue;
 
@@ -143,7 +141,6 @@ export function discoverResources(
         return;
       }
 
-      if (model.name.endsWith("Data")) return;
       if (!model.name || model.name === "") return;
 
       const nsPrefix = modelNsFQN;
