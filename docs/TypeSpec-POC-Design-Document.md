@@ -32,13 +32,19 @@ model Host {
 }
 ```
 
-### Define data fields (for JSON Schema):
+### Define data fields (for unified JSON Schema):
 
 ```typespec
-@jsonSchema
-model HostData {
+@format("uuid")
+scalar UuidString extends string;
+
+model Host {
+  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
+  view: Permission<"workspace.inventory_host_view">;
+  update: Permission<"workspace.inventory_host_update">;
+
   @format("uuid") subscription_manager_id?: string;
-  satellite_id?: string | SatelliteNumericId;
+  satellite_id?: UuidString | SatelliteNumericId;
   @maxLength(255) ansible_host?: string;
 }
 ```
@@ -342,7 +348,7 @@ This creates a three-layer trust boundary:
 - Declare `ResourceAnnotation` aliases (zero computation — metadata only)
 - Declare `CascadeDeletePolicy` aliases (zero computation — adds delete permission)
 - Define resource models with `Assignable`, `Permission`, `BoolRelation` properties
-- Define data models with `@jsonSchema` decorators
+- Define data fields inline on flat resource models using standard validation decorators
 
 **What service authors cannot do:**
 - Write loops, recursion, or arbitrary logic

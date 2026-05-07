@@ -151,13 +151,11 @@ model in addition to the permission aliases.
 **Create `schema/content-sources.tsp`:**
 
 ```typespec
-import "@typespec/json-schema";
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
 import "../providers/rbac/rbac-extensions.tsp";
 import "../providers/rbac/rbac.tsp";
 
-using JsonSchema;
 using Kessel;
 
 namespace ContentSources;
@@ -171,23 +169,16 @@ alias templateEdit = Kessel.V1WorkspacePermission<
   "content_sources", "templates", "write", "content_sources_template_edit"
 >;
 
-// ── Data model (emits as JSON Schema) ────────────────────────────────
-
-@jsonSchema
-model TemplateData {
-  @maxLength(255) name?: string;
-  @maxLength(1024) description?: string;
-  @format("uri") repository_url?: string;
-}
-
-// ── Resource type ────────────────────────────────────────────────────
+// ── Resource type (relations + data + permissions together) ─────────
 
 model Template {
   /** Every template belongs to exactly one workspace */
   workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
 
-  /** Data fields with validation */
-  data: TemplateData;
+  /** Data fields are declared inline and flow into unified JSON schema */
+  @maxLength(255) name?: string;
+  @maxLength(1024) description?: string;
+  @format("uri") repository_url?: string;
 
   /** View permission: resolves via workspace */
   view: Permission<"workspace.content_sources_template_view">;
@@ -223,7 +214,9 @@ definition content_sources/template {
 ```
 
 JSON Schema: `content_sources/template` with required `workspace_id`
-(uuid format), because the workspace relation has cardinality `ExactlyOne`.
+(uuid format) plus the inline data fields above, because `workspace` has
+cardinality `ExactlyOne` and the pipeline emits the non-Kessel fields from
+the same flat model.
 
 Metadata (`--metadata`):
 ```json
@@ -271,14 +264,6 @@ alias groupUpdatePermission = Kessel.V1WorkspacePermission<
   "inventory", "groups", "write", "inventory_group_update"
 >;
 
-// ── Group data model ─────────────────────────────────────────────────
-
-@jsonSchema
-model GroupData {
-  @maxLength(255) display_name?: string;
-  @maxLength(1024) description?: string;
-}
-
 // ── Group resource type ──────────────────────────────────────────────
 
 model Group {
@@ -289,7 +274,8 @@ model Group {
   hosts: Assignable<Host, Cardinality.Any>;
 
   /** Data fields */
-  data: GroupData;
+  @maxLength(255) display_name?: string;
+  @maxLength(1024) description?: string;
 
   /** View permission */
   view: Permission<"workspace.inventory_group_view">;
@@ -332,25 +318,31 @@ new permissions in the permissions list.
 
 If a resource already exists and you need to add validation fields:
 
-**Edit the existing `HostData` model in `schema/hbi.tsp`:**
+**Edit the existing `Host` model in `schema/hbi.tsp`:**
 
 ```typespec
-@jsonSchema
-model HostData {
+@format("uuid")
+scalar UuidString extends string;
+
+model Host {
+  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
   @format("uuid") subscription_manager_id?: string;
-  satellite_id?: string | SatelliteNumericId;
+  satellite_id?: UuidString | SatelliteNumericId;
   @format("uuid") insights_id?: string;
   @maxLength(255) ansible_host?: string;
 
   // New fields:
   @maxLength(255) display_name?: string;      // <- add
   @format("date-time") last_seen?: string;    // <- add
+
+  view: Permission<"workspace.inventory_host_view">;
+  update: Permission<"workspace.inventory_host_update">;
 }
 ```
 
 The `?` suffix makes a field optional. Without it, the field would be
-required in the JSON Schema. Data fields are emitted by the built-in
-`@typespec/json-schema` emitter and do not affect SpiceDB output.
+required in the unified JSON Schema. These data fields are emitted by the
+CLI pipeline from the flat resource model and do not affect SpiceDB output.
 
 ---
 

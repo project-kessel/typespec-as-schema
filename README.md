@@ -141,7 +141,7 @@ flowchart TB
 
 This project does **not** use custom TypeSpec decorators or a registered TypeSpec emitter plugin (`$onEmit`). Instead:
 
-- **Built-in decorators only** — `@doc`, `@format`, `@pattern`, `@jsonSchema` from the standard library are used in `schema/hbi.tsp` for data validation. These drive the built-in `@typespec/json-schema` emitter that writes `tsp-output/`. The `--emit-jsonschema` flag runs the JSON Schema emitter in the same compilation pass so a separate `tsp compile` invocation is no longer needed.
+- **Built-in validation decorators only** — standard decorators like `@doc`, `@format`, `@pattern`, and `@maxLength` are used directly on flat resource models (see `schema/hbi.tsp`). The CLI walks the compiled `Program`, extracts non-Kessel data fields, and emits the unified JSON schema itself. Service payload schemas are no longer modeled as nested `*Data` types decorated with `@jsonSchema`.
 - **Model templates as data carriers** — `V1WorkspacePermission` (in `providers/rbac/rbac-extensions.tsp`), `CascadeDeletePolicy`, and `ResourceAnnotation` (in `lib/kessel-extensions.tsp`) are plain TypeSpec `model` definitions with type parameters. They carry parameters but have zero compile-time behavior. Expansion logic is owned by the provider that defines the template.
 - **Provider-owned expansion** — Extension providers (like RBAC) implement the `ExtensionProvider` interface to own their discovery and expansion logic. The RBAC provider in `providers/rbac/rbac-provider.ts` owns the 7 mutations, `view_metadata` accumulation, and scaffold wiring. The platform pipeline orchestrates providers without hard-coding domain logic.
 - **Standalone CLI** — `spicedb-emitter.ts` calls `compile()` from `@typespec/compiler` to get a `Program` object, then runs the provider-driven pipeline. It is not registered as a TypeSpec emitter plugin — it is a standalone script that uses the compiler as a library. A `--watch` flag re-runs the pipeline on `.tsp` file changes without needing TypeSpec's plugin watch infrastructure.
@@ -218,7 +218,7 @@ test/                            Tests
 
 - **Node.js in CI** for `tsp` + `tsx`; Go loader example (`go-loader-example/`) needs no Node at runtime
 - **New extension types** require a new provider implementing `ExtensionProvider` and registration in the CLI composition root (`spicedb-emitter.ts`)
-- **Two JSON Schema paths** — built-in `@jsonSchema` emit vs unified schema (mitigated by `--emit-jsonschema` flag which runs both in one pass)
+- **Custom unified JSON schema path** — the CLI derives service payload schema from flat resource models so it can omit Kessel-only relation/permission internals while preserving service-authored validation metadata
 
 ## Future: TypeSpec Emitter Plugin
 

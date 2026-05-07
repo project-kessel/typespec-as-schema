@@ -9,12 +9,10 @@ Guide for adding a new service to the Kessel TypeSpec schema.
 Create `schema/<service-name>.tsp`:
 
 ```typespec
-import "@typespec/json-schema";
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
 import "./rbac.tsp";
 
-using JsonSchema;
 using Kessel;
 
 namespace <ServiceNamespace>;
@@ -35,13 +33,20 @@ alias viewPermission = Kessel.V1WorkspacePermission<
 
 ### 3. Define data fields (optional)
 
-If the resource has reportable data, create a `*Data` model with JSON Schema decorators:
+If the resource has reportable data, declare those fields directly on the
+resource model with standard validation decorators:
 
 ```typespec
-@jsonSchema
-model WidgetData {
+@format("uuid")
+scalar WidgetId extends string;
+
+model Widget {
+  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
+  view: Permission<"workspace.myapp_widget_view">;
+  update: Permission<"workspace.myapp_widget_update">;
+
   @format("uuid")
-  external_id?: string;
+  external_id?: WidgetId;
 
   @maxLength(255)
   display_name?: string;
@@ -50,14 +55,7 @@ model WidgetData {
 
 ### 4. Define the resource model
 
-```typespec
-model Widget {
-  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
-  data: WidgetData;
-  view: Permission<"workspace.myapp_widget_view">;
-  update: Permission<"workspace.myapp_widget_update">;
-}
-```
+The same flat model carries relations, data fields, and computed permissions.
 
 ### 5. Register in main.tsp
 
@@ -78,7 +76,7 @@ npx vitest run
 
 - [ ] Service file created in `schema/`
 - [ ] V1WorkspacePermission aliases for each permission
-- [ ] Resource model with `workspace` relation and computed permissions
+- [ ] Flat resource model with `workspace` relation, inline data fields, and computed permissions
 - [ ] Imported in `main.tsp`
 - [ ] Emitter runs without errors
 - [ ] Tests pass
