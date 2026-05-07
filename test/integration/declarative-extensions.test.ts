@@ -85,6 +85,44 @@ describe("Expansion: Unified JSON Schema", () => {
     expect(hostSchema.properties["workspace_id"]).toBeDefined();
     expect(hostSchema.required).toContain("workspace_id");
   });
+
+  it("wraps optional data fields in oneOf with null", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.properties["subscription_manager_id"]).toEqual({
+      oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+    });
+    expect(hostSchema.properties["insights_id"]).toEqual({
+      oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+    });
+    expect(hostSchema.properties["ansible_host"]).toEqual({
+      oneOf: [{ type: "string", maxLength: 255 }, { type: "null" }],
+    });
+  });
+
+  it("includes union data fields as oneOf with null appended", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    const satProp = hostSchema.properties["satellite_id"];
+    expect(satProp).toBeDefined();
+    expect("oneOf" in satProp).toBe(true);
+    if ("oneOf" in satProp) {
+      expect(satProp.oneOf).toHaveLength(3);
+      expect(satProp.oneOf[satProp.oneOf.length - 1]).toEqual({ type: "null" });
+    }
+  });
+
+  it("data fields are optional (not in required)", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.required).not.toContain("subscription_manager_id");
+    expect(hostSchema.required).not.toContain("ansible_host");
+    expect(hostSchema.required).not.toContain("satellite_id");
+    expect(hostSchema.required).not.toContain("insights_id");
+  });
+
+  it("permission fields are excluded from schema", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.properties["view"]).toBeUndefined();
+    expect(hostSchema.properties["update"]).toBeUndefined();
+  });
 });
 
 // ─── Annotation Discovery Tests ─────────────────────────────────────

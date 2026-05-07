@@ -3,6 +3,9 @@ import {
   IR_VERSION,
   type ResourceDef,
   type UnifiedJsonSchema,
+  type JsonSchemaProperty,
+  type DataFieldDef,
+  type DataFieldSchema,
   type ServiceMetadata,
   type IntermediateRepresentation,
   type CascadeDeleteEntry,
@@ -45,6 +48,30 @@ export function generateSpiceDB(resources: ResourceDef[]): string {
   return lines.join("\n");
 }
 
+function dataFieldSchemaToProperty(schema: DataFieldSchema): JsonSchemaProperty {
+  if ("oneOf" in schema) {
+    return { oneOf: schema.oneOf.map(dataFieldSchemaToProperty) };
+  }
+
+  const prop: JsonSchemaProperty = { type: schema.type };
+  if ("format" in schema && schema.format) prop.format = schema.format;
+  if ("maxLength" in schema && schema.maxLength !== undefined) prop.maxLength = schema.maxLength;
+  if ("minLength" in schema && schema.minLength !== undefined) prop.minLength = schema.minLength;
+  if ("pattern" in schema && schema.pattern) prop.pattern = schema.pattern;
+  return prop;
+}
+
+const NULL_SCHEMA: JsonSchemaProperty = { type: "null" };
+
+function dataFieldToProperty(field: DataFieldDef): JsonSchemaProperty {
+  const base = dataFieldSchemaToProperty(field.schema);
+  if (field.required) return base;
+  if ("oneOf" in base) {
+    return { oneOf: [...base.oneOf, NULL_SCHEMA] };
+  }
+  return { oneOf: [base, NULL_SCHEMA] };
+}
+
 /**
  * Generates unified JSON schemas for resources, excluding provider-owned
  * namespaces (e.g., "rbac") which are internal to their provider.
@@ -60,7 +87,7 @@ export function generateUnifiedJsonSchemas(
     if (skip.has(res.namespace)) continue;
 
     const schema: UnifiedJsonSchema = {
-      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $schema: "http://json-schema.org/draft-07/schema#",
       $id: `${res.namespace}/${res.name}`,
       type: "object",
       properties: {},
@@ -81,6 +108,14 @@ export function generateUnifiedJsonSchemas(
           source: `relation ${rel.name}: ${rel.body.target} [ExactlyOne]`,
         };
         schema.required.push(idField);
+        hasContent = true;
+      }
+    }
+
+    if (res.dataFields) {
+      for (const field of res.dataFields) {
+        schema.properties[field.name] = dataFieldToProperty(field);
+        if (field.required) schema.required.push(field.name);
         hasContent = true;
       }
     }
