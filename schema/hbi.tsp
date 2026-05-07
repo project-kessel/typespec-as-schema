@@ -62,17 +62,16 @@ alias hostRetention = Kessel.ResourceAnnotation<
   "90"
 >;
 
-// ─── Host Data Schema (→ JSONSchema) ─────────────────────────────────
-// Native TypeSpec types with validation decorators.
-// The @jsonSchema decorator makes this emit as JSONSchema.
-
 /** 10-digit numeric satellite ID format */
 @pattern("^\\d{10}$")
 scalar SatelliteNumericId extends string;
 
-/** Data fields for a host resource, with validation rules */
+/** Host resource in the inventory service */
 @jsonSchema
-model HostData {
+model Host {
+  /** Every host belongs to exactly one RBAC workspace */
+  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
+
   /** UUID of the subscription manager */
   @format("uuid")
   subscription_manager_id?: string;
@@ -87,22 +86,7 @@ model HostData {
   /** Ansible hostname, max 255 characters */
   @maxLength(255)
   ansible_host?: string;
-}
 
-// ─── Host Resource Type ──────────────────────────────────────────────
-// Combines relations (→ SpiceDB) and data fields (→ JSONSchema).
-
-/** Host resource in the inventory service */
-model Host {
-  // ── Assignable relation ──
-  /** Every host belongs to exactly one RBAC workspace */
-  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
-
-  // ── Data fields ──
-  /** Host data fields with validation */
-  data: HostData;
-
-  // ── Computed permissions (via RBAC extension) ──
   /** View permission: resolves to workspace.inventory_host_view */
   view: Permission<"workspace.inventory_host_view">;
 
