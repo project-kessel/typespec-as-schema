@@ -10,8 +10,11 @@ import {
   getFormat,
   getMaxLength,
   getMinLength,
+  getMaxValue,
+  getMinValue,
   getPattern,
   type Program,
+  type Enum,
   type Model,
   type ModelProperty,
   type Scalar,
@@ -61,6 +64,24 @@ function resolveTargetName(t: Type | undefined): string {
 
 // ─── Data field extraction ───────────────────────────────────────────
 
+type ScalarMapping = { jsonType: string; constraints?: "string" | "numeric" };
+
+const SCALAR_MAP: Record<string, ScalarMapping> = {
+  string:         { jsonType: "string",  constraints: "string" },
+  int32:          { jsonType: "integer", constraints: "numeric" },
+  int64:          { jsonType: "integer", constraints: "numeric" },
+  integer:        { jsonType: "integer", constraints: "numeric" },
+  boolean:        { jsonType: "boolean" },
+  float32:        { jsonType: "number",  constraints: "numeric" },
+  float64:        { jsonType: "number",  constraints: "numeric" },
+  numeric:        { jsonType: "number",  constraints: "numeric" },
+  decimal:        { jsonType: "number",  constraints: "numeric" },
+  utcDateTime:    { jsonType: "string",  constraints: "string" },
+  offsetDateTime: { jsonType: "string",  constraints: "string" },
+  plainDate:      { jsonType: "string",  constraints: "string" },
+  plainTime:      { jsonType: "string",  constraints: "string" },
+};
+
 function resolveBaseScalar(scalar: Scalar): Scalar {
   let base = scalar;
   while (base.baseScalar) base = base.baseScalar;
@@ -73,9 +94,16 @@ function scalarToSchema(
   prop: ModelProperty | null,
 ): DataFieldSchema | null {
   const base = resolveBaseScalar(scalar);
+  const mapping = SCALAR_MAP[base.name];
 
-  if (base.name === "string") {
-    const schema: DataFieldSchema & { type: "string" } = { type: "string" };
+  if (!mapping) {
+    console.error(`Warning: unrecognized scalar type "${base.name}"; skipping data field extraction`);
+    return null;
+  }
+
+  const schema: Record<string, unknown> = { type: mapping.jsonType };
+
+  if (mapping.constraints === "string") {
     const format = getFormat(program, scalar) ?? (prop ? getFormat(program, prop) : undefined);
     if (format) schema.format = format;
     const maxLen = getMaxLength(program, scalar) ?? (prop ? getMaxLength(program, prop) : undefined);
@@ -84,14 +112,14 @@ function scalarToSchema(
     if (minLen !== undefined) schema.minLength = minLen;
     const pat = getPattern(program, scalar) ?? (prop ? getPattern(program, prop) : undefined);
     if (pat) schema.pattern = pat;
-    return schema;
+  } else if (mapping.constraints === "numeric") {
+    const min = getMinValue(program, scalar) ?? (prop ? getMinValue(program, prop) : undefined);
+    if (min !== undefined) schema.minimum = min;
+    const max = getMaxValue(program, scalar) ?? (prop ? getMaxValue(program, prop) : undefined);
+    if (max !== undefined) schema.maximum = max;
   }
 
-  if (base.name === "int32" || base.name === "int64" || base.name === "integer") {
-    return { type: "integer" };
-  }
-
-  return null;
+  return schema as DataFieldSchema;
 }
 
 function extractDataField(
@@ -120,7 +148,63 @@ function extractDataField(
     return { name, required: !prop.optional, schema: { oneOf: variants } };
   }
 
+  if (propType.kind === "Enum") {
+    return enumToDataField(name, prop, propType);
+  }
+
+  if (propType.kind !== "Intrinsic") {
+    console.error(`Warning: unsupported type kind "${propType.kind}" for data field "${name}"; skipping`);
+  }
   return null;
+}
+
+function enumValues(enumType: Enum): string[] {
+  return [...enumType.members.values()].map(m =>
+    m.value !== undefined ? String(m.value) : m.name,
+  );
+}
+
+function enumToDataField(name: string, prop: ModelProperty, enumType: Enum): DataFieldDef {
+  return { name, required: !prop.optional, schema: { type: "string", enum: enumValues(enumType) } };
+}
+
+function typeToSchema(program: Program, type: Type): DataFieldSchema | null {
+  if (type.kind === "Scalar") return scalarToSchema(program, type, null);
+  if (type.kind === "Enum") {
+    return { type: "string", enum: enumValues(type) };
+  }
+  if (type.kind === "Model") return modelToSchema(program, type);
+  console.error(`Warning: unsupported type kind "${type.kind}" in nested schema; skipping`);
+  return null;
+}
+
+function modelToSchema(program: Program, model: Model): DataFieldSchema | null {
+  if (model.indexer) {
+    const itemSchema = typeToSchema(program, model.indexer.value);
+    return itemSchema ? { type: "array", items: itemSchema } : { type: "array" };
+  }
+  const properties: Record<string, DataFieldSchema> = {};
+  const required: string[] = [];
+  for (const [pName, pProp] of model.properties) {
+    const s = typeToSchema(program, pProp.type);
+    if (s) {
+      properties[pName] = s;
+      if (!pProp.optional) required.push(pName);
+    }
+  }
+  if (Object.keys(properties).length === 0) return null;
+  return { type: "object", properties, ...(required.length > 0 ? { required } : {}) };
+}
+
+function extractModelDataField(
+  program: Program,
+  name: string,
+  prop: ModelProperty,
+  model: Model,
+): DataFieldDef | null {
+  const schema = modelToSchema(program, model);
+  if (!schema) return null;
+  return { name, required: !prop.optional, schema };
 }
 
 // ─── Resource model conversion ───────────────────────────────────────
@@ -176,6 +260,9 @@ function modelToResource(
       if (parsed) {
         relations.push({ name, body: parsed });
       }
+    } else {
+      const field = extractModelDataField(program, name, prop, propType);
+      if (field) dataFields.push(field);
     }
   }
 

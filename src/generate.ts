@@ -52,17 +52,37 @@ function dataFieldSchemaToProperty(schema: DataFieldSchema): JsonSchemaProperty 
   if ("oneOf" in schema) {
     return { oneOf: schema.oneOf.map(dataFieldSchemaToProperty) };
   }
+
+  if (schema.type === "array") {
+    const prop: JsonSchemaProperty = { type: "array" };
+    if (schema.items) prop.items = dataFieldSchemaToProperty(schema.items);
+    return prop;
+  }
+
+  if (schema.type === "object") {
+    const prop: JsonSchemaProperty = { type: "object" };
+    if (schema.properties) {
+      prop.properties = {};
+      for (const [k, v] of Object.entries(schema.properties)) {
+        prop.properties[k] = dataFieldSchemaToProperty(v);
+      }
+    }
+    if (schema.required && schema.required.length > 0) prop.required = schema.required;
+    return prop;
+  }
+
   const prop: JsonSchemaProperty = { type: schema.type };
-  if ("format" in schema && schema.format) (prop as Record<string, unknown>).format = schema.format;
-  if ("maxLength" in schema && schema.maxLength !== undefined) (prop as Record<string, unknown>).maxLength = schema.maxLength;
-  if ("minLength" in schema && schema.minLength !== undefined) (prop as Record<string, unknown>).minLength = schema.minLength;
-  if ("pattern" in schema && schema.pattern) (prop as Record<string, unknown>).pattern = schema.pattern;
-  if ("minimum" in schema && schema.minimum !== undefined) (prop as Record<string, unknown>).minimum = schema.minimum;
-  if ("maximum" in schema && schema.maximum !== undefined) (prop as Record<string, unknown>).maximum = schema.maximum;
+  if ("format" in schema && schema.format) prop.format = schema.format;
+  if ("maxLength" in schema && schema.maxLength !== undefined) prop.maxLength = schema.maxLength;
+  if ("minLength" in schema && schema.minLength !== undefined) prop.minLength = schema.minLength;
+  if ("pattern" in schema && schema.pattern) prop.pattern = schema.pattern;
+  if ("enum" in schema && schema.enum) prop.enum = schema.enum;
+  if ("minimum" in schema && schema.minimum !== undefined) prop.minimum = schema.minimum;
+  if ("maximum" in schema && schema.maximum !== undefined) prop.maximum = schema.maximum;
   return prop;
 }
 
-const NULL_SCHEMA: JsonSchemaProperty = { type: "null" };
+const NULL_SCHEMA: JsonSchemaProperty = Object.freeze({ type: "null" });
 
 function dataFieldToProperty(field: DataFieldDef): JsonSchemaProperty {
   const base = dataFieldSchemaToProperty(field.schema);

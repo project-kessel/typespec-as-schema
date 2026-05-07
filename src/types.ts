@@ -14,8 +14,12 @@ export type RelationBody =
   | { kind: "and"; members: RelationBody[] };
 
 export type DataFieldSchema =
-  | { type: "string"; format?: string; maxLength?: number; minLength?: number; pattern?: string }
+  | { type: "string"; format?: string; maxLength?: number; minLength?: number; pattern?: string; enum?: string[] }
   | { type: "integer"; minimum?: number; maximum?: number }
+  | { type: "number"; minimum?: number; maximum?: number }
+  | { type: "boolean" }
+  | { type: "array"; items?: DataFieldSchema }
+  | { type: "object"; properties?: Record<string, DataFieldSchema>; required?: string[] }
   | { oneOf: DataFieldSchema[] };
 
 export interface DataFieldDef {
@@ -32,7 +36,20 @@ export interface ResourceDef {
 }
 
 export type JsonSchemaProperty =
-  | { type: string; format?: string; maxLength?: number; minLength?: number; pattern?: string; source?: string }
+  | {
+      type: string;
+      format?: string;
+      maxLength?: number;
+      minLength?: number;
+      pattern?: string;
+      source?: string;
+      enum?: (string | number)[];
+      minimum?: number;
+      maximum?: number;
+      items?: JsonSchemaProperty;
+      properties?: Record<string, JsonSchemaProperty>;
+      required?: string[];
+    }
   | { oneOf: JsonSchemaProperty[] };
 
 export interface UnifiedJsonSchema {

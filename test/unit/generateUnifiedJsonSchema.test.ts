@@ -183,4 +183,156 @@ describe("generateUnifiedJsonSchemas", () => {
     expect(schemas["myapp/config"]).toBeDefined();
     expect(schemas["myapp/config"].properties["key"]).toEqual({ type: "string" });
   });
+
+  it("required data fields are not wrapped in oneOf with null", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "host",
+        namespace: "inventory",
+        relations: [],
+        dataFields: [
+          { name: "name", required: true, schema: { type: "string" } },
+          { name: "label", required: false, schema: { type: "string" } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    expect(schemas["inventory/host"].properties["name"]).toEqual({ type: "string" });
+    expect(schemas["inventory/host"].properties["label"]).toEqual({
+      oneOf: [{ type: "string" }, { type: "null" }],
+    });
+  });
+
+  it("emits boolean data fields", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "k8s_policy",
+        namespace: "k8s",
+        relations: [],
+        dataFields: [
+          { name: "disabled", required: true, schema: { type: "boolean" } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    expect(schemas["k8s/k8s_policy"].properties["disabled"]).toEqual({ type: "boolean" });
+  });
+
+  it("emits string enum data fields", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "k8s_cluster",
+        namespace: "k8s",
+        relations: [],
+        dataFields: [
+          {
+            name: "cluster_status",
+            required: true,
+            schema: { type: "string", enum: ["READY", "FAILED", "OFFLINE"] },
+          },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    const prop = schemas["k8s/k8s_cluster"].properties["cluster_status"];
+    expect(prop).toEqual({ type: "string", enum: ["READY", "FAILED", "OFFLINE"] });
+  });
+
+  it("emits integer data fields with bounds", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "document",
+        namespace: "drive",
+        relations: [],
+        dataFields: [
+          { name: "file_size", required: false, schema: { type: "integer", minimum: 0 } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    const prop = schemas["drive/document"].properties["file_size"];
+    expect(prop).toEqual({
+      oneOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+    });
+  });
+
+  it("emits array data fields with items", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "k8s_cluster",
+        namespace: "k8s",
+        relations: [],
+        dataFields: [
+          {
+            name: "nodes",
+            required: false,
+            schema: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  cpu: { type: "string" },
+                  memory: { type: "string" },
+                },
+                required: ["name", "cpu", "memory"],
+              },
+            },
+          },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    const prop = schemas["k8s/k8s_cluster"].properties["nodes"];
+    expect("oneOf" in prop).toBe(true);
+    if ("oneOf" in prop) {
+      expect(prop.oneOf).toHaveLength(2);
+      const arraySchema = prop.oneOf[0];
+      expect("type" in arraySchema && arraySchema.type).toBe("array");
+      if ("items" in arraySchema && arraySchema.items) {
+        expect("properties" in arraySchema.items).toBe(true);
+      }
+    }
+  });
+
+  it("emits number data fields", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "sensor",
+        namespace: "iot",
+        relations: [],
+        dataFields: [
+          { name: "temperature", required: true, schema: { type: "number", minimum: -40, maximum: 85 } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    expect(schemas["iot/sensor"].properties["temperature"]).toEqual({
+      type: "number", minimum: -40, maximum: 85,
+    });
+  });
+
+  it("emits date-time format on string fields", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "document",
+        namespace: "drive",
+        relations: [],
+        dataFields: [
+          { name: "created_at", required: true, schema: { type: "string", format: "date-time" } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    expect(schemas["drive/document"].properties["created_at"]).toEqual({
+      type: "string", format: "date-time",
+    });
+  });
 });
