@@ -66,6 +66,9 @@ alias hostRetention = Kessel.ResourceAnnotation<
 @pattern("^\\d{10}$")
 scalar SatelliteNumericId extends string;
 
+// ─── Host Resource Type ──────────────────────────────────────────────
+// Combines relations (→ SpiceDB) and data fields (→ JSONSchema).
+
 /** Host resource in the inventory service */
 @jsonSchema
 model Host {

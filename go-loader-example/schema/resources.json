@@ -1,12 +1,50 @@
 {
   "version": "1.2.0",
-  "generatedAt": "2026-05-01T04:57:48.794Z",
+  "generatedAt": "2026-05-07T13:55:50.250Z",
   "source": "schema/main.tsp",
   "resources": [
     {
       "name": "principal",
       "namespace": "rbac",
       "relations": []
+    },
+    {
+      "name": "host",
+      "namespace": "inventory",
+      "relations": [
+        {
+          "name": "workspace",
+          "body": {
+            "kind": "assignable",
+            "target": "rbac/workspace",
+            "cardinality": "ExactlyOne"
+          }
+        },
+        {
+          "name": "view",
+          "body": {
+            "kind": "subref",
+            "name": "t_workspace",
+            "subname": "inventory_host_view"
+          }
+        },
+        {
+          "name": "update",
+          "body": {
+            "kind": "subref",
+            "name": "t_workspace",
+            "subname": "inventory_host_update"
+          }
+        },
+        {
+          "name": "delete",
+          "body": {
+            "kind": "subref",
+            "name": "t_workspace",
+            "subname": "delete"
+          }
+        }
+      ]
     },
     {
       "name": "role",
@@ -458,36 +496,6 @@
           }
         }
       ]
-    },
-    {
-      "name": "host",
-      "namespace": "unknown",
-      "relations": [
-        {
-          "name": "workspace",
-          "body": {
-            "kind": "assignable",
-            "target": "rbac/workspace",
-            "cardinality": "ExactlyOne"
-          }
-        },
-        {
-          "name": "view",
-          "body": {
-            "kind": "subref",
-            "name": "t_workspace",
-            "subname": "inventory_host_view"
-          }
-        },
-        {
-          "name": "update",
-          "body": {
-            "kind": "subref",
-            "name": "t_workspace",
-            "subname": "inventory_host_update"
-          }
-        }
-      ]
     }
   ],
   "extensions": {
@@ -518,14 +526,16 @@
       }
     ]
   },
-  "spicedb": "definition rbac/principal {\n}\n\ndefinition rbac/role {\n    permission any_any_any = t_any_any_any\n    permission inventory_any_any = t_inventory_any_any\n    permission inventory_hosts_any = t_inventory_hosts_any\n    permission inventory_any_read = t_inventory_any_read\n    permission inventory_hosts_read = t_inventory_hosts_read\n    permission inventory_any_write = t_inventory_any_write\n    permission inventory_hosts_write = t_inventory_hosts_write\n    permission remediations_any_any = t_remediations_any_any\n    permission remediations_remediations_any = t_remediations_remediations_any\n    permission remediations_any_read = t_remediations_any_read\n    permission remediations_remediations_read = t_remediations_remediations_read\n    permission remediations_any_write = t_remediations_any_write\n    permission remediations_remediations_write = t_remediations_remediations_write\n    permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read\n    permission inventory_host_update = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_write + inventory_hosts_write\n    permission remediations_remediation_view = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_read + remediations_remediations_read\n    permission remediations_remediation_update = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_write + remediations_remediations_write\n    permission delete = any_any_any\n\n    relation t_any_any_any: rbac/principal:*\n    relation t_inventory_any_any: rbac/principal:*\n    relation t_inventory_hosts_any: rbac/principal:*\n    relation t_inventory_any_read: rbac/principal:*\n    relation t_inventory_hosts_read: rbac/principal:*\n    relation t_inventory_any_write: rbac/principal:*\n    relation t_inventory_hosts_write: rbac/principal:*\n    relation t_remediations_any_any: rbac/principal:*\n    relation t_remediations_remediations_any: rbac/principal:*\n    relation t_remediations_any_read: rbac/principal:*\n    relation t_remediations_remediations_read: rbac/principal:*\n    relation t_remediations_any_write: rbac/principal:*\n    relation t_remediations_remediations_write: rbac/principal:*\n}\n\ndefinition rbac/role_binding {\n    permission subject = t_subject\n    permission granted = t_granted\n    permission inventory_host_view = (subject & t_granted->inventory_host_view)\n    permission inventory_host_update = (subject & t_granted->inventory_host_update)\n    permission remediations_remediation_view = (subject & t_granted->remediations_remediation_view)\n    permission remediations_remediation_update = (subject & t_granted->remediations_remediation_update)\n    permission delete = (subject & t_granted->delete)\n\n    relation t_subject: rbac/principal\n    relation t_granted: rbac/role\n}\n\ndefinition rbac/workspace {\n    permission parent = t_parent\n    permission binding = t_binding\n    permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view\n    permission inventory_host_update = t_binding->inventory_host_update + t_parent->inventory_host_update\n    permission remediations_remediation_view = t_binding->remediations_remediation_view + t_parent->remediations_remediation_view\n    permission remediations_remediation_update = t_binding->remediations_remediation_update + t_parent->remediations_remediation_update\n    permission view_metadata = inventory_host_view + remediations_remediation_view\n    permission delete = t_binding->delete + t_parent->delete\n\n    relation t_parent: rbac/workspace\n    relation t_binding: rbac/role_binding\n}\n\ndefinition unknown/host {\n    permission workspace = t_workspace\n    permission view = t_workspace->inventory_host_view\n    permission update = t_workspace->inventory_host_update\n\n    relation t_workspace: rbac/workspace\n}\n",
+  "spicedb": "definition rbac/principal {\n}\n\ndefinition inventory/host {\n    permission workspace = t_workspace\n    permission view = t_workspace->inventory_host_view\n    permission update = t_workspace->inventory_host_update\n    permission delete = t_workspace->delete\n\n    relation t_workspace: rbac/workspace\n}\n\ndefinition rbac/role {\n    permission any_any_any = t_any_any_any\n    permission inventory_any_any = t_inventory_any_any\n    permission inventory_hosts_any = t_inventory_hosts_any\n    permission inventory_any_read = t_inventory_any_read\n    permission inventory_hosts_read = t_inventory_hosts_read\n    permission inventory_any_write = t_inventory_any_write\n    permission inventory_hosts_write = t_inventory_hosts_write\n    permission remediations_any_any = t_remediations_any_any\n    permission remediations_remediations_any = t_remediations_remediations_any\n    permission remediations_any_read = t_remediations_any_read\n    permission remediations_remediations_read = t_remediations_remediations_read\n    permission remediations_any_write = t_remediations_any_write\n    permission remediations_remediations_write = t_remediations_remediations_write\n    permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read\n    permission inventory_host_update = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_write + inventory_hosts_write\n    permission remediations_remediation_view = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_read + remediations_remediations_read\n    permission remediations_remediation_update = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_write + remediations_remediations_write\n    permission delete = any_any_any\n\n    relation t_any_any_any: rbac/principal:*\n    relation t_inventory_any_any: rbac/principal:*\n    relation t_inventory_hosts_any: rbac/principal:*\n    relation t_inventory_any_read: rbac/principal:*\n    relation t_inventory_hosts_read: rbac/principal:*\n    relation t_inventory_any_write: rbac/principal:*\n    relation t_inventory_hosts_write: rbac/principal:*\n    relation t_remediations_any_any: rbac/principal:*\n    relation t_remediations_remediations_any: rbac/principal:*\n    relation t_remediations_any_read: rbac/principal:*\n    relation t_remediations_remediations_read: rbac/principal:*\n    relation t_remediations_any_write: rbac/principal:*\n    relation t_remediations_remediations_write: rbac/principal:*\n}\n\ndefinition rbac/role_binding {\n    permission subject = t_subject\n    permission granted = t_granted\n    permission inventory_host_view = (subject & t_granted->inventory_host_view)\n    permission inventory_host_update = (subject & t_granted->inventory_host_update)\n    permission remediations_remediation_view = (subject & t_granted->remediations_remediation_view)\n    permission remediations_remediation_update = (subject & t_granted->remediations_remediation_update)\n    permission delete = (subject & t_granted->delete)\n\n    relation t_subject: rbac/principal\n    relation t_granted: rbac/role\n}\n\ndefinition rbac/workspace {\n    permission parent = t_parent\n    permission binding = t_binding\n    permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view\n    permission inventory_host_update = t_binding->inventory_host_update + t_parent->inventory_host_update\n    permission remediations_remediation_view = t_binding->remediations_remediation_view + t_parent->remediations_remediation_view\n    permission remediations_remediation_update = t_binding->remediations_remediation_update + t_parent->remediations_remediation_update\n    permission view_metadata = inventory_host_view + remediations_remediation_view\n    permission delete = t_binding->delete + t_parent->delete\n\n    relation t_parent: rbac/workspace\n    relation t_binding: rbac/role_binding\n}\n",
   "metadata": {
     "inventory": {
       "permissions": [
         "inventory_host_view",
         "inventory_host_update"
       ],
-      "resources": [],
+      "resources": [
+        "host"
+      ],
       "cascadeDeletePolicies": [
         "host via workspace"
       ],
@@ -540,18 +550,12 @@
         "remediations_remediation_update"
       ],
       "resources": []
-    },
-    "unknown": {
-      "permissions": [],
-      "resources": [
-        "host"
-      ]
     }
   },
   "jsonSchemas": {
-    "unknown/host": {
+    "inventory/host": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "$id": "unknown/host",
+      "$id": "inventory/host",
       "type": "object",
       "properties": {
         "workspace_id": {
