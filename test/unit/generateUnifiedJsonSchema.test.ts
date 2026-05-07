@@ -88,7 +88,99 @@ describe("generateUnifiedJsonSchemas", () => {
     ];
 
     const schemas = generateUnifiedJsonSchemas(resources);
-    expect(schemas["inventory/host"].properties.workspace_id.source)
+    const prop = schemas["inventory/host"].properties.workspace_id;
+    expect("source" in prop && prop.source)
       .toBe("relation workspace: rbac/workspace [ExactlyOne]");
+  });
+
+  it("includes data fields in schema properties", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "host",
+        namespace: "inventory",
+        relations: [
+          { name: "workspace", body: { kind: "assignable", target: "rbac/workspace", cardinality: "ExactlyOne" } },
+        ],
+        dataFields: [
+          { name: "ansible_host", required: false, schema: { type: "string", maxLength: 255 } },
+          { name: "insights_id", required: false, schema: { type: "string", format: "uuid" } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    const schema = schemas["inventory/host"];
+    expect(schema.properties["ansible_host"]).toEqual({
+      oneOf: [{ type: "string", maxLength: 255 }, { type: "null" }],
+    });
+    expect(schema.properties["insights_id"]).toEqual({
+      oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+    });
+    expect(schema.required).not.toContain("ansible_host");
+    expect(schema.required).not.toContain("insights_id");
+  });
+
+  it("includes required data fields in required array", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "host",
+        namespace: "inventory",
+        relations: [],
+        dataFields: [
+          { name: "name", required: true, schema: { type: "string" } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    const schema = schemas["inventory/host"];
+    expect(schema.required).toContain("name");
+  });
+
+  it("emits oneOf for union data fields", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "host",
+        namespace: "inventory",
+        relations: [],
+        dataFields: [
+          {
+            name: "satellite_id",
+            required: false,
+            schema: {
+              oneOf: [
+                { type: "string" },
+                { type: "string", pattern: "^\\d{10}$" },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    const prop = schemas["inventory/host"].properties["satellite_id"];
+    expect("oneOf" in prop).toBe(true);
+    if ("oneOf" in prop) {
+      expect(prop.oneOf).toHaveLength(3);
+      expect(prop.oneOf[prop.oneOf.length - 1]).toEqual({ type: "null" });
+    }
+  });
+
+  it("emits schema for resources with only data fields (no relations)", () => {
+    const resources: ResourceDef[] = [
+      {
+        name: "config",
+        namespace: "myapp",
+        relations: [],
+        dataFields: [
+          { name: "key", required: true, schema: { type: "string" } },
+        ],
+      },
+    ];
+
+    const schemas = generateUnifiedJsonSchemas(resources);
+    expect(schemas["myapp/config"]).toBeDefined();
+    expect(schemas["myapp/config"].properties["key"]).toEqual({ type: "string" });
   });
 });

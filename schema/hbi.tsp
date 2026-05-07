@@ -2,13 +2,11 @@
 // Defines the host resource type with data fields, validation rules,
 // and permissions derived from RBAC workspace permission extensions.
 
-import "@typespec/json-schema";
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
 import "./rbac/rbac-extensions.tsp";
 import "./rbac/rbac.tsp";
 
-using JsonSchema;
 using Kessel;
 
 namespace Inventory;
@@ -62,15 +60,20 @@ alias hostRetention = Kessel.ResourceAnnotation<
   "90"
 >;
 
+/** UUID string format */
+@format("uuid")
+scalar UuidString extends string;
+
 /** 10-digit numeric satellite ID format */
 @pattern("^\\d{10}$")
 scalar SatelliteNumericId extends string;
 
 // ─── Host Resource Type ──────────────────────────────────────────────
-// Combines relations (→ SpiceDB) and data fields (→ JSONSchema).
+// Relations (→ SpiceDB), data fields (→ JSONSchema), and permissions
+// are all defined at the same level. The pipeline extracts data fields
+// for JSON Schema and filters out Kessel types automatically.
 
 /** Host resource in the inventory service */
-@jsonSchema
 model Host {
   /** Every host belongs to exactly one RBAC workspace */
   workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
@@ -80,7 +83,7 @@ model Host {
   subscription_manager_id?: string;
 
   /** Can be UUID or 10-digit numeric string */
-  satellite_id?: string | SatelliteNumericId;
+  satellite_id?: UuidString | SatelliteNumericId;
 
   /** UUID of the insights registration */
   @format("uuid")

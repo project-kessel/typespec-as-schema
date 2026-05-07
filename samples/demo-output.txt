@@ -110,7 +110,7 @@ definition rbac/workspace {
 === Unified JSON Schema ================================================
 {
   "inventory/host": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "inventory/host",
     "type": "object",
     "properties": {
@@ -118,6 +118,54 @@ definition rbac/workspace {
         "type": "string",
         "format": "uuid",
         "source": "relation workspace: rbac/workspace [ExactlyOne]"
+      },
+      "subscription_manager_id": {
+        "oneOf": [
+          {
+            "type": "string",
+            "format": "uuid"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "satellite_id": {
+        "oneOf": [
+          {
+            "type": "string",
+            "format": "uuid"
+          },
+          {
+            "type": "string",
+            "pattern": "^\\d{10}$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "insights_id": {
+        "oneOf": [
+          {
+            "type": "string",
+            "format": "uuid"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "ansible_host": {
+        "oneOf": [
+          {
+            "type": "string",
+            "maxLength": 255
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -146,30 +194,11 @@ Parameters: {
 Expanded SpiceDB for affected resources:
 
   rbac/role:
-    relation t_inventory_any_any: rbac/principal:*
-    permission inventory_any_any = t_inventory_any_any
-    relation t_inventory_hosts_any: rbac/principal:*
-    permission inventory_hosts_any = t_inventory_hosts_any
-    relation t_inventory_any_read: rbac/principal:*
-    permission inventory_any_read = t_inventory_any_read
-    relation t_inventory_hosts_read: rbac/principal:*
-    permission inventory_hosts_read = t_inventory_hosts_read
     permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read
-    relation t_inventory_any_write: rbac/principal:*
-    permission inventory_any_write = t_inventory_any_write
-    relation t_inventory_hosts_write: rbac/principal:*
-    permission inventory_hosts_write = t_inventory_hosts_write
-    permission inventory_host_update = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_write + inventory_hosts_write
-    relation t_remediations_any_read: rbac/principal:*
-    permission remediations_any_read = t_remediations_any_read
-    relation t_remediations_remediations_read: rbac/principal:*
-    permission remediations_remediations_read = t_remediations_remediations_read
   rbac/role_binding:
     permission inventory_host_view = (subject & t_granted->inventory_host_view)
-    permission inventory_host_update = (subject & t_granted->inventory_host_update)
   rbac/workspace:
     permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view
-    permission inventory_host_update = t_binding->inventory_host_update + t_parent->inventory_host_update
 
   + CascadeDeletePolicy: inventory/host
        permission delete = t_workspace->delete

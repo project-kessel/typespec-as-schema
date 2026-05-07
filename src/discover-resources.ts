@@ -7,11 +7,17 @@
 import {
   navigateProgram,
   isTemplateInstance,
+  getFormat,
+  getMaxLength,
+  getMinLength,
+  getPattern,
   type Program,
   type Model,
+  type ModelProperty,
+  type Scalar,
   type Type,
 } from "@typespec/compiler";
-import type { RelationDef, ResourceDef } from "./types.js";
+import type { RelationDef, ResourceDef, DataFieldDef, DataFieldSchema } from "./types.js";
 import type { ExtensionTemplateDef } from "./registry.js";
 import { getNamespaceFQN, camelToSnake } from "./utils.js";
 import { parsePermissionExpr } from "./parser.js";
@@ -53,18 +59,88 @@ function resolveTargetName(t: Type | undefined): string {
   return "unknown";
 }
 
+// ─── Data field extraction ───────────────────────────────────────────
+
+function resolveBaseScalar(scalar: Scalar): Scalar {
+  let base = scalar;
+  while (base.baseScalar) base = base.baseScalar;
+  return base;
+}
+
+function scalarToSchema(
+  program: Program,
+  scalar: Scalar,
+  prop: ModelProperty | null,
+): DataFieldSchema | null {
+  const base = resolveBaseScalar(scalar);
+
+  if (base.name === "string") {
+    const schema: DataFieldSchema & { type: "string" } = { type: "string" };
+    const format = getFormat(program, scalar) ?? (prop ? getFormat(program, prop) : undefined);
+    if (format) schema.format = format;
+    const maxLen = getMaxLength(program, scalar) ?? (prop ? getMaxLength(program, prop) : undefined);
+    if (maxLen !== undefined) schema.maxLength = maxLen;
+    const minLen = getMinLength(program, scalar) ?? (prop ? getMinLength(program, prop) : undefined);
+    if (minLen !== undefined) schema.minLength = minLen;
+    const pat = getPattern(program, scalar) ?? (prop ? getPattern(program, prop) : undefined);
+    if (pat) schema.pattern = pat;
+    return schema;
+  }
+
+  if (base.name === "int32" || base.name === "int64" || base.name === "integer") {
+    return { type: "integer" };
+  }
+
+  return null;
+}
+
+function extractDataField(
+  program: Program,
+  name: string,
+  prop: ModelProperty,
+): DataFieldDef | null {
+  const propType = prop.type;
+
+  if (propType.kind === "Scalar") {
+    const schema = scalarToSchema(program, propType, prop);
+    if (!schema) return null;
+    return { name, required: !prop.optional, schema };
+  }
+
+  if (propType.kind === "Union") {
+    const variants: DataFieldSchema[] = [];
+    for (const [, variant] of propType.variants) {
+      if (variant.type.kind === "Scalar") {
+        const s = scalarToSchema(program, variant.type as Scalar, null);
+        if (s) variants.push(s);
+      }
+    }
+    if (variants.length === 0) return null;
+    if (variants.length === 1) return { name, required: !prop.optional, schema: variants[0] };
+    return { name, required: !prop.optional, schema: { oneOf: variants } };
+  }
+
+  return null;
+}
+
 // ─── Resource model conversion ───────────────────────────────────────
 
 function modelToResource(
+  program: Program,
   model: Model,
-  nsPrefix: string
+  nsPrefix: string,
 ): ResourceDef | null {
   const relations: RelationDef[] = [];
+  const dataFields: DataFieldDef[] = [];
   let hasRelations = false;
 
   for (const [name, prop] of model.properties) {
     const propType = prop.type;
-    if (propType.kind !== "Model") continue;
+    if (propType.kind !== "Model") {
+      const field = extractDataField(program, name, prop);
+      if (field) dataFields.push(field);
+      continue;
+    }
 
     if (isKesselType(propType, "Assignable")) {
       hasRelations = true;
@@ -110,6 +186,7 @@ function modelToResource(
     name: camelToSnake(model.name),
     namespace: nsName || getNamespaceFQN(model.namespace)?.toLowerCase() || "unknown",
     relations,
+    ...(dataFields.length > 0 ? { dataFields } : {}),
   };
 }
 
@@ -147,7 +224,7 @@ export function discoverResources(
       const key = `${nsPrefix}/${model.name}`;
       if (seenResources.has(key)) return;
 
-      const resource = modelToResource(model, nsPrefix);
+      const resource = modelToResource(program, model, nsPrefix);
       if (resource) {
         seenResources.add(key);
         resources.push(resource);

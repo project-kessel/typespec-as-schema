@@ -1,6 +1,6 @@
 {
   "version": "1.2.0",
-  "generatedAt": "2026-05-07T13:55:50.250Z",
+  "generatedAt": "2026-05-07T15:21:47.512Z",
   "source": "schema/main.tsp",
   "resources": [
     {
@@ -42,6 +42,48 @@
             "kind": "subref",
             "name": "t_workspace",
             "subname": "delete"
+          }
+        }
+      ],
+      "dataFields": [
+        {
+          "name": "subscription_manager_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "satellite_id",
+          "required": false,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\d{10}$"
+              }
+            ]
+          }
+        },
+        {
+          "name": "insights_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "ansible_host",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "maxLength": 255
           }
         }
       ]
@@ -554,7 +596,7 @@
   },
   "jsonSchemas": {
     "inventory/host": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$schema": "http://json-schema.org/draft-07/schema#",
       "$id": "inventory/host",
       "type": "object",
       "properties": {
@@ -562,6 +604,54 @@
           "type": "string",
           "format": "uuid",
           "source": "relation workspace: rbac/workspace [ExactlyOne]"
+        },
+        "subscription_manager_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "satellite_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\d{10}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "insights_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ansible_host": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
