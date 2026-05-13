@@ -54,7 +54,7 @@ export { PLATFORM_TEMPLATES, buildRegistry, type ExtensionTemplateDef, type Regi
 
 export type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "./provider.js";
 
-export { defineProvider, type ProviderConfig } from "./define-provider.js";
+export { defineProvider, validParams, type ProviderConfig } from "./define-provider.js";
 
 export {
   discoverProviderTemplates,

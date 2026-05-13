@@ -7,7 +7,7 @@
 
 import type { ResourceDef } from "../../src/types.js";
 import type { ProviderExpansionResult } from "../../src/provider.js";
-import { defineProvider } from "../../src/define-provider.js";
+import { defineProvider, validParams } from "../../src/define-provider.js";
 import { ref, subref, or, and, addRelation, hasRelation } from "../../src/primitives.js";
 import { findResource, cloneResources } from "../../src/utils.js";
 
@@ -93,10 +93,12 @@ export function wireDeleteScaffold(baseResources: ResourceDef[]): ResourceDef[] 
 // All metadata (ownedNamespaces, costPerInstance, param keys, template
 // registry) comes from @provider on V1WorkspacePermission in rbac-extensions.tsp.
 
+const V1_KEYS = ["application", "resource", "verb", "v2Perm"] as const;
+
 export const rbacProvider = defineProvider({
   id: "rbac",
   templates: [],
   expand: (resources, discovered) =>
-    expandV1Permissions(resources, discovered.map((d) => d.params as unknown as V1Extension)),
+    expandV1Permissions(resources, validParams<V1Extension>(discovered, V1_KEYS, (e) => VALID_VERBS.has(e.verb))),
   onBeforeCascadeDelete: wireDeleteScaffold,
 });

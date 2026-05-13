@@ -5,7 +5,7 @@
 
 import type { ResourceDef } from "../../src/types.js";
 import type { ProviderExpansionResult } from "../../src/provider.js";
-import { defineProvider } from "../../src/define-provider.js";
+import { defineProvider, validParams } from "../../src/define-provider.js";
 import { and, ref, subref, addRelation, hasRelation } from "../../src/primitives.js";
 import { findResource, cloneResources } from "../../src/utils.js";
 
@@ -33,9 +33,11 @@ function exposeHostPermissions(baseResources: ResourceDef[], extensions: HostPer
   return { resources, warnings: [] };
 }
 
+const HBI_KEYS = ["v2Perm", "hostPerm"] as const;
+
 export const hbiProvider = defineProvider({
   id: "hbi",
   templates: [],
   expand: (resources, discovered) =>
-    exposeHostPermissions(resources, discovered.map((d) => d.params as unknown as HostPermExtension)),
+    exposeHostPermissions(resources, validParams<HostPermExtension>(discovered, HBI_KEYS)),
 });

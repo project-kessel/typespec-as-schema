@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defineProvider, type ProviderConfig } from "../../src/define-provider.js";
+import { defineProvider, validParams, type ProviderConfig } from "../../src/define-provider.js";
 import type { DiscoveredExtension, ProviderExpansionResult } from "../../src/provider.js";
 import type { ResourceDef } from "../../src/types.js";
 
@@ -91,6 +91,51 @@ describe("defineProvider", () => {
     expect(provider.templates).toHaveLength(2);
     expect(provider.templates[0].templateName).toBe("ExtA");
     expect(provider.templates[1].templateName).toBe("ExtB");
+  });
+});
+
+describe("validParams", () => {
+  function ext(params: Record<string, string>): DiscoveredExtension {
+    return { kind: "Test", params };
+  }
+
+  it("returns typed objects when all required keys are present", () => {
+    const discovered = [ext({ a: "1", b: "2" }), ext({ a: "3", b: "4" })];
+    const result = validParams<{ a: string; b: string }>(discovered, ["a", "b"]);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ a: "1", b: "2" });
+  });
+
+  it("drops entries with missing required keys", () => {
+    const discovered = [ext({ a: "1" }), ext({ a: "2", b: "3" })];
+    const result = validParams(discovered, ["a", "b"]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({ a: "2", b: "3" });
+  });
+
+  it("drops entries with empty string values", () => {
+    const discovered = [ext({ a: "1", b: "" })];
+    const result = validParams(discovered, ["a", "b"]);
+    expect(result).toHaveLength(0);
+  });
+
+  it("passes extra keys through", () => {
+    const discovered = [ext({ a: "1", b: "2", extra: "ok" })];
+    const result = validParams(discovered, ["a", "b"]);
+    expect(result).toHaveLength(1);
+    expect((result[0] as Record<string, string>).extra).toBe("ok");
+  });
+
+  it("applies optional validate predicate", () => {
+    const discovered = [ext({ verb: "read" }), ext({ verb: "explode" })];
+    const allowed = new Set(["read", "write"]);
+    const result = validParams<{ verb: string }>(discovered, ["verb"], (e) => allowed.has(e.verb));
+    expect(result).toHaveLength(1);
+    expect(result[0].verb).toBe("read");
+  });
+
+  it("returns empty array for empty discovered list", () => {
+    expect(validParams([], ["a"])).toEqual([]);
   });
 });
 

@@ -43,6 +43,41 @@ export interface ProviderConfig {
 }
 
 /**
+ * Validates that all required keys are present non-empty strings in a
+ * discovered extension's raw params, then returns the typed object.
+ * Returns null if any key is missing or empty.
+ */
+function parseParams<T>(
+  params: Record<string, string>,
+  requiredKeys: readonly string[],
+): T | null {
+  for (const key of requiredKeys) {
+    if (typeof params[key] !== "string" || params[key] === "") return null;
+  }
+  return params as unknown as T;
+}
+
+/**
+ * Extracts and validates typed params from discovered extensions in one pass.
+ * Drops entries with missing/empty required keys. An optional `validate`
+ * predicate allows provider-specific checks (e.g., verb allowlisting).
+ */
+export function validParams<T>(
+  discovered: DiscoveredExtension[],
+  requiredKeys: readonly string[],
+  validate?: (parsed: T) => boolean,
+): T[] {
+  const results: T[] = [];
+  for (const d of discovered) {
+    const parsed = parseParams<T>(d.params, requiredKeys);
+    if (parsed === null) continue;
+    if (validate && !validate(parsed)) continue;
+    results.push(parsed);
+  }
+  return results;
+}
+
+/**
  * Creates a full ExtensionProvider from a minimal config.
  *
  * Auto-generates discover() by scanning for instances of the provider's
