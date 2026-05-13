@@ -14,24 +14,35 @@ beforeAll(async () => {
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
 describe("V1 permission discovery", () => {
-  it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
-    expect(allExtensions()).toHaveLength(4);
+  it("discovers all extension instances from schema/main.tsp", () => {
+    expect(allExtensions()).toHaveLength(6);
   });
 
-  it("extracts correct v2Perm from each instance", () => {
-    const perms = allExtensions().map((e) => e.params.v2Perm).sort();
+  it("extracts correct v2Perm from RBAC provider instances", () => {
+    const rbacResult = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    const perms = rbacResult.discovered.map((e) => e.params.v2Perm).sort();
     expect(perms).toEqual([
       "inventory_host_update",
       "inventory_host_view",
       "remediations_remediation_update",
       "remediations_remediation_view",
+      "ros_read_analysis",
     ]);
   });
 
   it("extracts correct application names", () => {
-    const apps = new Set(allExtensions().map((e) => e.params.application));
+    const rbacResult = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    const apps = new Set(rbacResult.discovered.map((e) => e.params.application));
     expect(apps.has("inventory")).toBe(true);
     expect(apps.has("remediations")).toBe(true);
+    expect(apps.has("ros")).toBe(true);
+  });
+
+  it("HBI provider discovers ExposeHostPermission instances", () => {
+    const hbiResult = pipeline.providerResults.find((pr) => pr.providerId === "hbi")!;
+    expect(hbiResult.discovered).toHaveLength(1);
+    expect(hbiResult.discovered[0].params.v2Perm).toBe("ros_read_analysis");
+    expect(hbiResult.discovered[0].params.hostPerm).toBe("ros_read_analysis");
   });
 });
 
@@ -65,6 +76,7 @@ describe("Expansion: enriched model semantics", () => {
       expect(memberNames).toEqual([
         "inventory_host_view",
         "remediations_remediation_view",
+        "ros_read_analysis",
       ]);
     }
   });

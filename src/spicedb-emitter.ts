@@ -18,10 +18,11 @@ import { validateOutputSize } from "./safety.js";
 import { compilePipeline } from "./pipeline.js";
 import type { ExtensionProvider } from "./provider.js";
 import { rbacProvider } from "../schema/rbac/rbac-provider.js";
+import { hbiProvider } from "../schema/hbi/hbi-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const DEFAULT_PROVIDERS: ExtensionProvider[] = [rbacProvider];
+const DEFAULT_PROVIDERS: ExtensionProvider[] = [rbacProvider, hbiProvider];
 
 async function runOnce(args: string[], resolvedMain: string): Promise<void> {
   const emitJsonSchema = args.includes("--emit-jsonschema");

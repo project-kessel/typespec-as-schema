@@ -13,10 +13,7 @@ export interface ExtensionTemplateDef {
 }
 
 /** Platform-owned templates that are provider-neutral. */
-export const PLATFORM_TEMPLATES: readonly ExtensionTemplateDef[] = [
-  { templateName: "ResourceAnnotation",  paramNames: ["application", "resource", "key", "value"], namespace: "Kessel" },
-  { templateName: "CascadeDeletePolicy", paramNames: ["childApplication", "childResource", "parentRelation"], namespace: "Kessel" },
-];
+export const PLATFORM_TEMPLATES: readonly ExtensionTemplateDef[] = [];
 
 export interface RegistryResult {
   templates: ExtensionTemplateDef[];

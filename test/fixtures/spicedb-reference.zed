@@ -1,6 +1,5 @@
-// Golden reference SpiceDB schema for benchmark tests.
-// Generated from schema/main.tsp via the TypeSpec emitter pipeline.
-// This file must exactly match the emitter output (used for structural comparison).
+// Generated SpiceDB/Zed Schema from TypeSpec type graph
+// Produced by walking the compiled TypeSpec program.
 
 definition rbac/principal {
 }
@@ -9,6 +8,7 @@ definition inventory/host {
     permission workspace = t_workspace
     permission view = t_workspace->inventory_host_view
     permission update = t_workspace->inventory_host_update
+    permission ros_read_analysis = (view & t_workspace->ros_read_analysis)
     permission delete = t_workspace->delete
 
     relation t_workspace: rbac/workspace
@@ -28,10 +28,15 @@ definition rbac/role {
     permission remediations_remediations_read = t_remediations_remediations_read
     permission remediations_any_write = t_remediations_any_write
     permission remediations_remediations_write = t_remediations_remediations_write
+    permission ros_any_any = t_ros_any_any
+    permission ros_analysis_any = t_ros_analysis_any
+    permission ros_any_read = t_ros_any_read
+    permission ros_analysis_read = t_ros_analysis_read
     permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read
     permission inventory_host_update = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_write + inventory_hosts_write
     permission remediations_remediation_view = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_read + remediations_remediations_read
     permission remediations_remediation_update = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_write + remediations_remediations_write
+    permission ros_read_analysis = any_any_any + ros_any_any + ros_analysis_any + ros_any_read + ros_analysis_read
     permission delete = any_any_any
 
     relation t_any_any_any: rbac/principal:*
@@ -47,6 +52,10 @@ definition rbac/role {
     relation t_remediations_remediations_read: rbac/principal:*
     relation t_remediations_any_write: rbac/principal:*
     relation t_remediations_remediations_write: rbac/principal:*
+    relation t_ros_any_any: rbac/principal:*
+    relation t_ros_analysis_any: rbac/principal:*
+    relation t_ros_any_read: rbac/principal:*
+    relation t_ros_analysis_read: rbac/principal:*
 }
 
 definition rbac/role_binding {
@@ -56,6 +65,7 @@ definition rbac/role_binding {
     permission inventory_host_update = (subject & t_granted->inventory_host_update)
     permission remediations_remediation_view = (subject & t_granted->remediations_remediation_view)
     permission remediations_remediation_update = (subject & t_granted->remediations_remediation_update)
+    permission ros_read_analysis = (subject & t_granted->ros_read_analysis)
     permission delete = (subject & t_granted->delete)
 
     relation t_subject: rbac/principal
@@ -69,9 +79,11 @@ definition rbac/workspace {
     permission inventory_host_update = t_binding->inventory_host_update + t_parent->inventory_host_update
     permission remediations_remediation_view = t_binding->remediations_remediation_view + t_parent->remediations_remediation_view
     permission remediations_remediation_update = t_binding->remediations_remediation_update + t_parent->remediations_remediation_update
-    permission view_metadata = inventory_host_view + remediations_remediation_view
+    permission ros_read_analysis = t_binding->ros_read_analysis + t_parent->ros_read_analysis
+    permission view_metadata = inventory_host_view + remediations_remediation_view + ros_read_analysis
     permission delete = t_binding->delete + t_parent->delete
 
     relation t_parent: rbac/workspace
     relation t_binding: rbac/role_binding
 }
+

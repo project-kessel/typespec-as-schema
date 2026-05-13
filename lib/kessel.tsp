@@ -3,6 +3,8 @@
 // Data fields use native TypeSpec types (→ JSONSchema via built-in emitter).
 // Relations use typed wrappers (→ SpiceDB/Zed via custom emitter).
 
+import "./kessel-decorators.tsp";
+
 namespace Kessel;
 
 // ─── Cardinality ─────────────────────────────────────────────────────

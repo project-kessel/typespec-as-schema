@@ -8,11 +8,6 @@
 import { compile, NodeHost, type Program, type CompilerOptions } from "@typespec/compiler";
 import type { ResourceDef, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry, ProviderDiscoveryResult } from "./types.js";
 import { discoverResources } from "./discover-resources.js";
-import {
-  discoverAnnotations,
-  discoverCascadeDeletePolicies,
-  type DiscoveryWarnings,
-} from "./discover-platform.js";
 import { generateSpiceDB, generateUnifiedJsonSchemas } from "./generate.js";
 import { expandCascadeDeletePolicies } from "./expand-cascade.js";
 import {
@@ -28,6 +23,7 @@ import {
 } from "./safety.js";
 import type { ExtensionProvider } from "./provider.js";
 import { buildRegistry } from "./registry.js";
+import { enrichProvidersFromDecorators, discoverAnnotationDecorators, discoverCascadeDeleteDecorators } from "./decorator-reader.js";
 
 export interface PipelineOptions {
   limits?: Partial<SafetyLimits>;
@@ -97,16 +93,13 @@ export async function compilePipeline(
   }
 
   const warnings: string[] = [];
-  const discoveryWarnings: DiscoveryWarnings = {
-    skipped: [],
-    stats: { aliasesAttempted: 0, aliasesResolved: 0, resourcesFound: 0, extensionsFound: 0 },
-  };
+
+  enrichProvidersFromDecorators(program, providers);
 
   // ─── Resource discovery (generic) ────────────────────────────────
   const registryResult = buildRegistry(providers);
   warnings.push(...registryResult.warnings);
   const { resources } = discoverResources(program, registryResult.templates);
-  discoveryWarnings.stats.resourcesFound = resources.length;
 
   // ─── Provider discovery ──────────────────────────────────────────
   const providerResults: ProviderDiscoveryResult[] = [];
@@ -118,22 +111,11 @@ export async function compilePipeline(
       throw new DiscoveryTimeoutError(provider.id, Math.round(discoverElapsed), limits.discoveryTimeoutMs);
     }
     providerResults.push({ providerId: provider.id, discovered });
-    discoveryWarnings.stats.extensionsFound += discovered.length;
   }
 
-  // ─── Platform discovery (annotations, cascade) ───────────────────
-  const annotations = discoverAnnotations(program, discoveryWarnings);
-  const cascadePolicies = discoverCascadeDeletePolicies(program, discoveryWarnings);
-
-  warnings.push(...discoveryWarnings.skipped);
-
-  const { stats } = discoveryWarnings;
-  if (discoveryWarnings.skipped.length > 0) {
-    warnings.push(
-      `Alias resolution: ${stats.aliasesResolved}/${stats.aliasesAttempted} resolved, ` +
-      `${stats.aliasesAttempted - stats.aliasesResolved} skipped`,
-    );
-  }
+  // ─── Platform discovery (annotations, cascade — decorator-based) ─
+  const annotations = discoverAnnotationDecorators(program);
+  const cascadePolicies = discoverCascadeDeleteDecorators(program);
 
   // ─── Namespace cross-check (provider-driven) ────────────────────
   const knownNamespaces = new Set(resources.map((r) => r.namespace));

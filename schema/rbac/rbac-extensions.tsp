@@ -14,6 +14,7 @@ namespace Kessel;
 /** Allowed verbs for permission registration. */
 alias KesselVerb = "read" | "write" | "create" | "delete";
 
+@provider("rbac", "rbac", 7, "application", "v2Perm")
 model V1WorkspacePermission<
   App extends string,
   Res extends string,

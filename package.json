@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "type": "module",
   "tspMain": "lib/kessel.tsp",
+  "main": "dist/src/tsp-index.js",
+  "exports": {
+    ".": {
+      "typespec": "./lib/kessel.tsp",
+      "default": "./dist/src/tsp-index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",

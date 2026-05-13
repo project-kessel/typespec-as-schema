@@ -88,11 +88,12 @@ describe("compilePipeline with PipelineOptions", () => {
 describe("multi-provider interaction", () => {
   it("runs multiple providers and includes results from each", async () => {
     const { createNoopProvider } = await import("../helpers/mock-provider.js");
-    const secondProvider = createNoopProvider("noop");
-    const result = await compilePipeline(mainTsp, { providers: [...providers, secondProvider] });
-    expect(result.providerResults.length).toBe(2);
-    expect(result.providerResults[0].providerId).toBe("rbac");
-    expect(result.providerResults[1].providerId).toBe("noop");
+    const noopProvider = createNoopProvider("noop");
+    const result = await compilePipeline(mainTsp, { providers: [...providers, noopProvider] });
+    expect(result.providerResults.length).toBe(providers.length + 1);
+    expect(result.providerResults.map((pr) => pr.providerId)).toContain("rbac");
+    expect(result.providerResults.map((pr) => pr.providerId)).toContain("hbi");
+    expect(result.providerResults.map((pr) => pr.providerId)).toContain("noop");
   }, 30_000);
 
   it("respects provider ordering — first provider expands first", async () => {

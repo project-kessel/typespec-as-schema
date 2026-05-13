@@ -1,16 +1,18 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import * as fs from "fs";
 import * as os from "os";
 import { compile, NodeHost, type Program } from "@typespec/compiler";
-import { findExtensionTemplate } from "../../src/discover-extensions.js";
+import { findExtensionTemplate, discoverExtensionInstances } from "../../src/discover-extensions.js";
 import { discoverResources } from "../../src/discover-resources.js";
-import { discoverV1Permissions } from "../../schema/rbac/rbac-provider.js";
+import { getNamespaceFQN } from "../../src/utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const libDir = path.resolve(__dirname, "../../lib");
 const rbacExtDir = path.resolve(__dirname, "../../schema/rbac");
+
+const V1_TEMPLATE = { templateName: "V1WorkspacePermission", paramNames: ["application", "resource", "verb", "v2Perm"], namespace: "Kessel" };
 
 async function compileInlineWithLib(tspSource: string): Promise<Program> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "discover-test-"));
@@ -23,15 +25,15 @@ async function compileInlineWithLib(tspSource: string): Promise<Program> {
   return program;
 }
 
-describe("discoverV1Permissions", () => {
+describe("discoverExtensionInstances (V1WorkspacePermission)", () => {
   it("discovers a V1WorkspacePermission alias", async () => {
     const program = await compileInlineWithLib(`
       alias MyPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
     `);
 
-    const perms = discoverV1Permissions(program);
-    expect(perms).toHaveLength(1);
-    expect(perms[0]).toEqual({
+    const { results } = discoverExtensionInstances(program, V1_TEMPLATE);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({
       application: "myapp",
       resource: "widget",
       verb: "read",
@@ -39,28 +41,25 @@ describe("discoverV1Permissions", () => {
     });
   }, 30_000);
 
-  it("rejects permissions with invalid verbs", async () => {
+  it("invalid constraint params resolve as undefined (provider ignores gracefully)", async () => {
     const program = await compileInlineWithLib(`
       alias BadPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "explode", "myapp_widget_boom">;
     `);
 
-    const perms = discoverV1Permissions(program);
-    expect(perms).toHaveLength(0);
+    const { results } = discoverExtensionInstances(program, V1_TEMPLATE);
+    expect(results).toHaveLength(1);
+    expect(results[0].verb).toBeUndefined();
   }, 30_000);
 
-  it("accumulates skipped statements into warnings", async () => {
+  it("reports discovery stats", async () => {
     const program = await compileInlineWithLib(`
       alias GoodPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
     `);
 
-    const warnings = {
-      skipped: [] as string[],
-      stats: { aliasesAttempted: 0, aliasesResolved: 0, resourcesFound: 0, extensionsFound: 0 },
-    };
-    const perms = discoverV1Permissions(program, warnings);
-    expect(perms).toHaveLength(1);
-    expect(Array.isArray(warnings.skipped)).toBe(true);
-    expect(warnings.stats.extensionsFound).toBe(1);
+    const { results, aliasesAttempted, aliasesResolved } = discoverExtensionInstances(program, V1_TEMPLATE);
+    expect(results).toHaveLength(1);
+    expect(aliasesAttempted).toBeGreaterThanOrEqual(1);
+    expect(aliasesResolved).toBeGreaterThanOrEqual(1);
   }, 30_000);
 });
 
@@ -90,7 +89,7 @@ describe("findExtensionTemplate Kessel namespace filter", () => {
     expect(model!.name).toBe("V1WorkspacePermission");
   }, 30_000);
 
-  it("does NOT find a non-Kessel model with the same name", async () => {
+  it("finds a model by name even when multiple namespaces define it", async () => {
     const program = await compileInlineWithLib(`
       namespace FakeNs;
       model V1WorkspacePermission<T extends string> {
@@ -98,10 +97,8 @@ describe("findExtensionTemplate Kessel namespace filter", () => {
       }
     `);
 
-    const model = findExtensionTemplate(program, "V1WorkspacePermission");
+    const model = findExtensionTemplate(program, "V1WorkspacePermission", "Kessel");
     expect(model).not.toBeNull();
-    // The Kessel namespace filter should return the Kessel one, not the FakeNs one
-    const ns = model!.namespace;
-    expect(ns).toBeDefined();
+    expect(getNamespaceFQN(model!.namespace!)).toContain("Kessel");
   }, 30_000);
 });

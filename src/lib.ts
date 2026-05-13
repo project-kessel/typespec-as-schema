@@ -38,11 +38,6 @@ export {
   discoverExtensionInstances,
 } from "./discover-extensions.js";
 
-export {
-  discoverAnnotations,
-  discoverCascadeDeletePolicies,
-} from "./discover-platform.js";
-export type { DiscoveryWarnings, DiscoveryStats } from "./discover-platform.js";
 
 export { discoverResources } from "./discover-resources.js";
 
@@ -58,6 +53,17 @@ export {
 export { PLATFORM_TEMPLATES, buildRegistry, type ExtensionTemplateDef, type RegistryResult } from "./registry.js";
 
 export type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "./provider.js";
+
+export { defineProvider, type ProviderConfig } from "./define-provider.js";
+
+export {
+  discoverProviderTemplates,
+  enrichProvidersFromDecorators,
+  discoverAnnotationDecorators,
+  discoverCascadeDeleteDecorators,
+  type DiscoveredProviderTemplate,
+  type ProviderDecoratorMetadata,
+} from "./decorator-reader.js";
 
 export { compilePipeline, type PipelineResult, type PipelineOptions } from "./pipeline.js";
 

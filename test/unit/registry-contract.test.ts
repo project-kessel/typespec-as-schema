@@ -2,17 +2,17 @@ import { describe, it, expect, beforeAll } from "vitest";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { compile, NodeHost, type Program, type Model } from "@typespec/compiler";
-import { buildRegistry } from "../../src/registry.js";
+import { buildRegistry, type ExtensionTemplateDef } from "../../src/registry.js";
 import { findExtensionTemplate } from "../../src/discover-extensions.js";
 import { getNamespaceFQN } from "../../src/utils.js";
 import { rbacProvider } from "../../schema/rbac/rbac-provider.js";
+import { enrichProvidersFromDecorators } from "../../src/decorator-reader.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntrypoint = path.resolve(__dirname, "../../schema/main.tsp");
 
-const { templates: ALL_TEMPLATES } = buildRegistry([rbacProvider]);
-
 let program: Program;
+let ALL_TEMPLATES: ExtensionTemplateDef[];
 
 beforeAll(async () => {
   program = await compile(NodeHost, mainEntrypoint, { noEmit: true });
@@ -20,6 +20,9 @@ beforeAll(async () => {
   if (errors.length > 0) {
     throw new Error(`Schema compilation failed:\n${errors.map((d) => d.message).join("\n")}`);
   }
+  enrichProvidersFromDecorators(program, [rbacProvider]);
+  const registry = buildRegistry([rbacProvider]);
+  ALL_TEMPLATES = registry.templates;
 }, 30_000);
 
 describe("Registry-TSP contract", () => {
@@ -57,13 +60,20 @@ describe("Registry-TSP contract", () => {
   });
 
   it("warns on duplicate template names across providers", () => {
-    const dupProvider = {
-      id: "dup",
-      templates: [{ templateName: "V1WorkspacePermission", paramNames: ["application", "resource", "verb", "v2Perm"], namespace: "Kessel" }],
+    const sharedTemplate = { templateName: "V1WorkspacePermission", paramNames: ["application", "resource", "verb", "v2Perm"], namespace: "Kessel" };
+    const providerA = {
+      id: "provA",
+      templates: [sharedTemplate],
       discover: () => [],
       expand: (r: any) => ({ resources: r, warnings: [] }),
     };
-    const { warnings } = buildRegistry([rbacProvider, dupProvider]);
+    const providerB = {
+      id: "provB",
+      templates: [sharedTemplate],
+      discover: () => [],
+      expand: (r: any) => ({ resources: r, warnings: [] }),
+    };
+    const { warnings } = buildRegistry([providerA, providerB]);
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("Duplicate template");
     expect(warnings[0]).toContain("V1WorkspacePermission");

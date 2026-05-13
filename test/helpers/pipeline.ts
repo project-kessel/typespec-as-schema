@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 import { generateMetadata, generateIR } from "../../src/generate.js";
 import { compilePipeline as runPipeline, type PipelineResult, type PipelineOptions } from "../../src/pipeline.js";
 import { rbacProvider } from "../../schema/rbac/rbac-provider.js";
+import { hbiProvider } from "../../schema/hbi/hbi-provider.js";
 
 export type { PipelineResult };
 
@@ -12,7 +13,7 @@ export const pocRoot = path.resolve(__dirname, "../..");
 export const mainTsp = path.resolve(pocRoot, "schema/main.tsp");
 export const goldenDir = path.resolve(pocRoot, "test/fixtures");
 
-export const DEFAULT_TEST_PROVIDERS = [rbacProvider];
+export const DEFAULT_TEST_PROVIDERS = [rbacProvider, hbiProvider];
 
 /**
  * Compiles the main.tsp schema through the real pipeline — the same
