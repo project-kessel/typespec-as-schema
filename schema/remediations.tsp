@@ -14,7 +14,7 @@ namespace Remediations;
 // ─── Extension Applications ──────────────────────────────────────────
 
 /** Maps remediations:remediations:read → remediations_remediation_view on workspace */
-alias remediationViewPermission = Kessel.V1WorkspacePermission<
+alias remediationViewPermission = RBAC.V1WorkspacePermission<
   "remediations",
   "remediations",
   "read",
@@ -22,7 +22,7 @@ alias remediationViewPermission = Kessel.V1WorkspacePermission<
 >;
 
 /** Maps remediations:remediations:write → remediations_remediation_update on workspace */
-alias remediationUpdatePermission = Kessel.V1WorkspacePermission<
+alias remediationUpdatePermission = RBAC.V1WorkspacePermission<
   "remediations",
   "remediations",
   "write",

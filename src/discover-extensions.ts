@@ -122,10 +122,11 @@ export function discoverExtensionInstances(
     results.push(params);
   }
 
+  const templateNsFQN = getNamespaceFQN(template.namespace);
   navigateProgram(program, {
     model(model: Model) {
       if (model.templateNode && !isTemplateInstance(model)) return;
-      if (getNamespaceFQN(model.namespace).endsWith("Kessel")) return;
+      if (getNamespaceFQN(model.namespace) === templateNsFQN) return;
       addUnique(model);
     },
   });

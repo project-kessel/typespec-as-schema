@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const libDir = path.resolve(__dirname, "../../lib");
 const rbacExtDir = path.resolve(__dirname, "../../schema/rbac");
 
-const V1_TEMPLATE = { templateName: "V1WorkspacePermission", paramNames: ["application", "resource", "verb", "v2Perm"], namespace: "Kessel" };
+const V1_TEMPLATE = { templateName: "V1WorkspacePermission", paramNames: ["application", "resource", "verb", "v2Perm"], namespace: "RBAC" };
 
 async function compileInlineWithLib(tspSource: string): Promise<Program> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "discover-test-"));
@@ -28,7 +28,7 @@ async function compileInlineWithLib(tspSource: string): Promise<Program> {
 describe("discoverExtensionInstances (V1WorkspacePermission)", () => {
   it("discovers a V1WorkspacePermission alias", async () => {
     const program = await compileInlineWithLib(`
-      alias MyPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
+      alias MyPerm = RBAC.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
     `);
 
     const { results } = discoverExtensionInstances(program, V1_TEMPLATE);
@@ -43,7 +43,7 @@ describe("discoverExtensionInstances (V1WorkspacePermission)", () => {
 
   it("invalid constraint params resolve as undefined (provider ignores gracefully)", async () => {
     const program = await compileInlineWithLib(`
-      alias BadPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "explode", "myapp_widget_boom">;
+      alias BadPerm = RBAC.V1WorkspacePermission<"myapp", "widget", "explode", "myapp_widget_boom">;
     `);
 
     const { results } = discoverExtensionInstances(program, V1_TEMPLATE);
@@ -53,7 +53,7 @@ describe("discoverExtensionInstances (V1WorkspacePermission)", () => {
 
   it("reports discovery stats", async () => {
     const program = await compileInlineWithLib(`
-      alias GoodPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
+      alias GoodPerm = RBAC.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
     `);
 
     const { results, aliasesAttempted, aliasesResolved } = discoverExtensionInstances(program, V1_TEMPLATE);
@@ -81,10 +81,10 @@ describe("discoverResources", () => {
   }, 30_000);
 });
 
-describe("findExtensionTemplate Kessel namespace filter", () => {
-  it("finds V1WorkspacePermission in the Kessel namespace", async () => {
+describe("findExtensionTemplate namespace filter", () => {
+  it("finds V1WorkspacePermission in the RBAC namespace", async () => {
     const program = await compileInlineWithLib(``);
-    const model = findExtensionTemplate(program, "V1WorkspacePermission");
+    const model = findExtensionTemplate(program, "V1WorkspacePermission", "RBAC");
     expect(model).not.toBeNull();
     expect(model!.name).toBe("V1WorkspacePermission");
   }, 30_000);
@@ -97,8 +97,8 @@ describe("findExtensionTemplate Kessel namespace filter", () => {
       }
     `);
 
-    const model = findExtensionTemplate(program, "V1WorkspacePermission", "Kessel");
+    const model = findExtensionTemplate(program, "V1WorkspacePermission", "RBAC");
     expect(model).not.toBeNull();
-    expect(getNamespaceFQN(model!.namespace!)).toContain("Kessel");
+    expect(getNamespaceFQN(model!.namespace!)).toContain("RBAC");
   }, 30_000);
 });

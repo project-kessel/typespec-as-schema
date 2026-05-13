@@ -9,5 +9,5 @@
 import "./rbac/rbac-extensions.tsp";
 import "./rbac/rbac.tsp";
 import "./hbi/hbi-extensions.tsp";
-import "./hbi.tsp";
+import "./hbi/hbi.tsp";
 import "./remediations.tsp";

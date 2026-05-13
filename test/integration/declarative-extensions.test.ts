@@ -15,7 +15,7 @@ beforeAll(async () => {
 
 describe("V1 permission discovery", () => {
   it("discovers all extension instances from schema/main.tsp", () => {
-    expect(allExtensions()).toHaveLength(6);
+    expect(allExtensions()).toHaveLength(4);
   });
 
   it("extracts correct v2Perm from RBAC provider instances", () => {
@@ -26,7 +26,6 @@ describe("V1 permission discovery", () => {
       "inventory_host_view",
       "remediations_remediation_update",
       "remediations_remediation_view",
-      "ros_read_analysis",
     ]);
   });
 
@@ -35,14 +34,11 @@ describe("V1 permission discovery", () => {
     const apps = new Set(rbacResult.discovered.map((e) => e.params.application));
     expect(apps.has("inventory")).toBe(true);
     expect(apps.has("remediations")).toBe(true);
-    expect(apps.has("ros")).toBe(true);
   });
 
-  it("HBI provider discovers ExposeHostPermission instances", () => {
+  it("HBI provider discovers zero instances when no schema uses HBI extensions", () => {
     const hbiResult = pipeline.providerResults.find((pr) => pr.providerId === "hbi")!;
-    expect(hbiResult.discovered).toHaveLength(1);
-    expect(hbiResult.discovered[0].params.v2Perm).toBe("ros_read_analysis");
-    expect(hbiResult.discovered[0].params.hostPerm).toBe("ros_read_analysis");
+    expect(hbiResult.discovered).toHaveLength(0);
   });
 });
 
@@ -76,7 +72,6 @@ describe("Expansion: enriched model semantics", () => {
       expect(memberNames).toEqual([
         "inventory_host_view",
         "remediations_remediation_view",
-        "ros_read_analysis",
       ]);
     }
   });

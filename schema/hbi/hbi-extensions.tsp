@@ -6,7 +6,9 @@
 
 import "../../lib/kessel.tsp";
 
-namespace Kessel;
+using Kessel;
+
+namespace HBI;
 
 /**
  * Exposes a workspace-level permission on the host resource.
