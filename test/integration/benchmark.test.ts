@@ -162,7 +162,7 @@ describe("M1: Feature Coverage", () => {
   });
 
   it("metadata output lists permissions and resources per service", () => {
-    const metadata = generateMetadata(pipeline.resources, pipeline.permissions);
+    const metadata = generateMetadata(pipeline.resources, pipeline.metadataContributions);
     expect(metadata.inventory).toBeDefined();
     expect(metadata.inventory.permissions).toContain("inventory_host_view");
     expect(metadata.remediations).toBeDefined();
@@ -277,7 +277,7 @@ describe("M4: SpiceDB Output Correctness vs Golden Reference", () => {
 
 describe("M4: Metadata Output Correctness", () => {
   it("matches expected benchmark metadata", () => {
-    const metadata = generateMetadata(pipeline.resources, pipeline.permissions);
+    const metadata = generateMetadata(pipeline.resources, pipeline.metadataContributions);
 
     expect(metadata.inventory).toBeDefined();
     expect(metadata.inventory.permissions).toEqual(

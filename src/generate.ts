@@ -1,6 +1,6 @@
 import type { ResourceDef, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry, ServiceMetadata } from "./types.js";
 import { bodyToZed, slotName, isAssignable } from "./utils.js";
-import type { V1Extension } from "./providers/rbac/rbac-provider.js";
+import type { MetadataContribution } from "./provider-registry.js";
 
 export function generateSpiceDB(resources: ResourceDef[]): string {
   const lines: string[] = [];
@@ -81,7 +81,7 @@ export function generateUnifiedJsonSchemas(
 
 export function generateMetadata(
   resources: ResourceDef[],
-  permissions: V1Extension[],
+  providerContributions: MetadataContribution[],
   ownedNamespaces?: Set<string>,
   annotations?: Map<string, AnnotationEntry[]>,
   cascadePolicies?: CascadeDeleteEntry[],
@@ -96,8 +96,11 @@ export function generateMetadata(
     return metadata[app];
   }
 
-  for (const perm of permissions) {
-    ensure(perm.application).permissions.push(perm.v2Perm);
+  for (const contribution of providerContributions) {
+    for (const [app, perms] of Object.entries(contribution.permissionsByApp)) {
+      const svc = ensure(app);
+      svc.permissions.push(...perms);
+    }
   }
 
   for (const res of resources) {

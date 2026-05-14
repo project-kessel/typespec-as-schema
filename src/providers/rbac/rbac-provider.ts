@@ -8,17 +8,12 @@
 //   - Starlark:   schema/rbac.star → v1_based_permission()
 //   - CUE:        rbac/rbac.cue → #AddV1BasedPermission
 
-import {
-  navigateProgram,
-  isTemplateInstance,
-  type Program,
-  type Model,
-  type Namespace,
-  type Type,
-} from "@typespec/compiler";
+import type { Program } from "@typespec/compiler";
 import type { ResourceDef } from "../../types.js";
 import { ref, subref, or, and, addRelation, hasRelation } from "../../primitives.js";
-import { findResource, cloneResources, getNamespaceFQN, getStringValue, extractParams } from "../../utils.js";
+import { findResource, cloneResources } from "../../utils.js";
+import { defineProvider } from "../../provider-registry.js";
+import { discoverTemplateInstances } from "../../discover-templates.js";
 
 // ─── RBAC domain types ──────────────────────────────────────────────
 
@@ -34,24 +29,6 @@ export interface V1Extension {
 export interface ExpansionResult {
   resources: ResourceDef[];
   warnings: string[];
-}
-
-interface RBACScaffold {
-  role: ResourceDef;
-  roleBinding: ResourceDef;
-  workspace: ResourceDef;
-}
-
-export interface DiscoveryStats {
-  aliasesAttempted: number;
-  aliasesResolved: number;
-  resourcesFound: number;
-  extensionsFound: number;
-}
-
-export interface DiscoveryWarnings {
-  skipped: string[];
-  stats: DiscoveryStats;
 }
 
 // ─── RBAC constants ─────────────────────────────────────────────────
@@ -70,133 +47,9 @@ function isKesselVerb(v: string): v is KesselVerb {
   return VALID_VERBS.has(v as KesselVerb);
 }
 
-// ─── V1WorkspacePermission template definition ──────────────────────
-
-export interface TemplateDef {
-  templateName: string;
-  paramNames: string[];
-  namespace: string;
-}
-
-const V1_TEMPLATE: TemplateDef = {
-  templateName: "V1WorkspacePermission",
-  paramNames: ["application", "resource", "verb", "v2Perm"],
-  namespace: "Kessel",
-};
-
-// ─── AST Walking Utilities ──────────────────────────────────────────
-
-function findTemplate(program: Program, templateName: string, namespace?: string): Model | null {
-  const globalNs = program.getGlobalNamespaceType();
-  function search(ns: Namespace): Model | null {
-    for (const [, model] of ns.models) {
-      if (model.name === templateName &&
-          (!namespace || getNamespaceFQN(ns).endsWith(namespace))) {
-        return model;
-      }
-    }
-    for (const [, childNs] of ns.namespaces) {
-      const found = search(childNs);
-      if (found) return found;
-    }
-    return null;
-  }
-  return search(globalNs);
-}
-
-function isInstanceOfTemplate(model: Model, template: Model): boolean {
-  if (!isTemplateInstance(model)) return false;
-  if (model.sourceModel === template) return true;
-  if (model.templateNode === template.node) return true;
-  if (
-    model.name === template.name &&
-    getNamespaceFQN(model.namespace) === getNamespaceFQN(template.namespace)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function isExpectedResolutionError(e: unknown): boolean {
-  if (!(e instanceof Error)) return false;
-  const record = e as unknown as Record<string, unknown>;
-  if (typeof record.code === "string") {
-    const knownCodes = ["unresolved-type", "unknown-identifier", "invalid-ref"];
-    if (knownCodes.includes(record.code)) return true;
-  }
-  if (typeof record.diagnosticCode === "string") return true;
-  return /cannot|not found|resolve/i.test(e.message);
-}
-
-export function discoverTemplateInstances(
-  program: Program,
-  def: TemplateDef,
-): { results: Record<string, string>[]; skipped: string[]; aliasesAttempted: number; aliasesResolved: number } {
-  const { templateName, paramNames, namespace } = def;
-  const template = findTemplate(program, templateName, namespace);
-  if (!template) {
-    return {
-      results: [],
-      skipped: [`Template "${templateName}" (namespace: ${namespace ?? "any"}) not found in compiled program`],
-      aliasesAttempted: 0,
-      aliasesResolved: 0,
-    };
-  }
-
-  const results: Record<string, string>[] = [];
-  const seen = new Set<string>();
-  const skipped: string[] = [];
-
-  function addUnique(model: Model): void {
-    if (!isInstanceOfTemplate(model, template!)) return;
-    const params = extractParams(model, paramNames);
-    if (Object.keys(params).length === 0) {
-      const modelId = model.name || "(anonymous)";
-      skipped.push(`Matched template "${templateName}" but extracted no params from model "${modelId}"`);
-      return;
-    }
-    const key = JSON.stringify(params);
-    if (seen.has(key)) return;
-    seen.add(key);
-    results.push(params);
-  }
-
-  navigateProgram(program, {
-    model(model: Model) {
-      if (model.templateNode && !isTemplateInstance(model)) return;
-      if (getNamespaceFQN(model.namespace).endsWith("Kessel")) return;
-      addUnique(model);
-    },
-  });
-
-  let aliasesAttempted = 0;
-  let aliasesResolved = 0;
-
-  for (const [, sourceFile] of program.sourceFiles) {
-    for (const statement of sourceFile.statements) {
-      if (!("value" in statement && "id" in statement)) continue;
-      aliasesAttempted++;
-      try {
-        const aliasType = program.checker.getTypeForNode(statement);
-        if (!aliasType || aliasType.kind !== "Model") continue;
-        aliasesResolved++;
-        addUnique(aliasType as Model);
-      } catch (e: unknown) {
-        if (isExpectedResolutionError(e)) {
-          skipped.push(`Skipped statement in ${templateName} discovery: ${e instanceof Error ? e.message : String(e)}`);
-          continue;
-        }
-        throw e;
-      }
-    }
-  }
-
-  return { results, skipped, aliasesAttempted, aliasesResolved };
-}
-
 // ─── RBAC scaffold resolution ───────────────────────────────────────
 
-function resolveRBACScaffold(resources: ResourceDef[]): { scaffold: RBACScaffold | null; warnings: string[] } {
+function resolveRBACScaffold(resources: ResourceDef[]) {
   const role = findResource(resources, "rbac", "role");
   const roleBinding = findResource(resources, "rbac", "role_binding");
   const workspace = findResource(resources, "rbac", "workspace");
@@ -208,12 +61,12 @@ function resolveRBACScaffold(resources: ResourceDef[]): { scaffold: RBACScaffold
       !workspace && "rbac/workspace",
     ].filter(Boolean);
     return {
-      scaffold: null,
+      scaffold: null as null,
       warnings: [`RBAC scaffold incomplete — missing ${missing.join(", ")}. V1 permission expansion skipped.`],
     };
   }
 
-  return { scaffold: { role, roleBinding, workspace }, warnings: [] };
+  return { scaffold: { role, roleBinding, workspace }, warnings: [] as string[] };
 }
 
 // ─── RBAC expansion helpers ─────────────────────────────────────────
@@ -316,12 +169,30 @@ export function wireDeleteScaffold(resources: ResourceDef[]): ResourceDef[] {
   return result;
 }
 
-// ─── V1 Permission Discovery ────────────────────────────────────────
+// ─── V1 Permission Discovery (test/pipeline utility) ────────────────
+
+export interface DiscoveryStats {
+  aliasesAttempted: number;
+  aliasesResolved: number;
+  resourcesFound: number;
+  extensionsFound: number;
+}
+
+export interface DiscoveryWarnings {
+  skipped: string[];
+  stats: DiscoveryStats;
+}
+
+const V1_TEMPLATE_DEF = {
+  templateName: "V1WorkspacePermission",
+  paramNames: ["application", "resource", "verb", "v2Perm"] as string[],
+  namespace: "Kessel",
+};
 
 export function discoverV1Permissions(program: Program, warnings?: DiscoveryWarnings): V1Extension[] {
   const { results, skipped, aliasesAttempted, aliasesResolved } = discoverTemplateInstances(
     program,
-    V1_TEMPLATE,
+    V1_TEMPLATE_DEF,
   );
   if (warnings) {
     warnings.skipped.push(...skipped);
@@ -339,3 +210,35 @@ export function discoverV1Permissions(program: Program, warnings?: DiscoveryWarn
   if (warnings) warnings.stats.extensionsFound += extensions.length;
   return extensions;
 }
+
+// ─── Provider registration via defineProvider ────────────────────────
+
+export const rbacProvider = defineProvider<V1Extension>({
+  name: "rbac",
+  ownedNamespaces: ["rbac"],
+
+  template: {
+    name: "V1WorkspacePermission",
+    params: ["application", "resource", "verb", "v2Perm"],
+    filter: (p) => !!(p.application && p.resource && p.verb && p.v2Perm) && isKesselVerb(p.verb),
+  },
+
+  expand(resources, permissions) {
+    return expandV1Permissions(resources, permissions);
+  },
+
+  postExpand(resources) {
+    return wireDeleteScaffold(resources);
+  },
+
+  contributeMetadata(permissions) {
+    const permissionsByApp: Record<string, string[]> = {};
+    for (const perm of permissions) {
+      if (!permissionsByApp[perm.application]) {
+        permissionsByApp[perm.application] = [];
+      }
+      permissionsByApp[perm.application].push(perm.v2Perm);
+    }
+    return { permissionsByApp };
+  },
+});

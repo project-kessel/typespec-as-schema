@@ -81,3 +81,22 @@ export {
   generateUnifiedJsonSchemas,
   generateMetadata,
 } from "./generate.js";
+
+export {
+  discoverTemplateInstances,
+  type TemplateDef,
+  type TemplateDiscoveryResult,
+} from "./discover-templates.js";
+
+export {
+  defineProvider,
+  registerProvider,
+  getProviders,
+  clearProviders,
+  type ProviderConfig,
+  type ProviderTemplateConfig,
+  type KesselProvider,
+  type ProviderDiscoveryResult,
+  type ProviderExpansionResult,
+  type MetadataContribution,
+} from "./provider-registry.js";

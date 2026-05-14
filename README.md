@@ -101,9 +101,9 @@ flowchart TB
 
   subgraph emitter ["Emitter Plugin (src/)"]
     compile["1. Compile\n@typespec/compiler\n.tsp → typed Program"]
-    discover["2. Discover\ndiscover-resources.ts\ndiscover-decorated.ts\nrbac-provider.ts"]
+    discover["2. Discover\ndiscover-resources.ts\ndiscover-decorated.ts\nprovider-registry.ts"]
     preVal["3. Pre-validate\nsafety.ts"]
-    expand["4. Expand\nexpandV1Permissions()\nwireDeleteScaffold()\nexpandCascadeDeletePolicies()"]
+    expand["4. Provider Expand\nprovider.expand()\nprovider.postExpand()\nexpandCascadeDeletePolicies()"]
     postVal["5. Post-validate\nsafety.ts (strict mode)"]
     generate["6. Generate + Emit\ngenerate.ts"]
   end
@@ -125,13 +125,15 @@ flowchart TB
 
 ### Emitter Plugin Model
 
-This project is a **registered TypeSpec emitter plugin** with custom decorators:
+This project is a **registered TypeSpec emitter plugin** with custom decorators and a **provider registry**:
 
+- **Provider registry** — `src/provider-registry.ts` defines `KesselProvider` interface. Providers self-register at module load time; the emitter loops over them for discovery, expansion, and metadata contribution. New providers require only new files + a side-effect import.
+- **Shared template discovery** — `src/discover-templates.ts` centralizes all internal compiler API usage (AST walking, alias resolution). Providers declare *what* template they own; the platform handles *how* to find instances.
 - **Custom decorators** — `@cascadePolicy` and `@annotation` (declared in `lib/decorators.tsp`, implemented in `src/decorators.ts`) tag models into compiler state sets for reliable discovery.
-- **`$onEmit` entry point** — `src/emitter.ts` exports `$onEmit`, which the TypeSpec compiler calls after compilation. It orchestrates the full pipeline: discover → pre-validate → expand → post-validate → generate.
+- **`$onEmit` entry point** — `src/emitter.ts` exports `$onEmit`, which the TypeSpec compiler calls after compilation. It orchestrates the full pipeline: discover → pre-validate → provider expand → cascade expand → post-validate → generate.
 - **`$lib` registration** — `src/lib.ts` defines the emitter library with `createTypeSpecLibrary`, including emitter options (`output-format`, `strict`) and custom diagnostics.
-- **Two-pass expression validation** — Permission expressions are validated both pre-expansion (catches typos before RBAC mutations) and post-expansion (catches cross-resource reference errors in the fully expanded graph).
-- **Model templates as data carriers** — `V1WorkspacePermission`, `CascadeDeletePolicy`, and `ResourceAnnotation` are parameterized TypeSpec models that carry string parameters. Expansion logic is owned by the RBAC provider.
+- **Two-pass expression validation** — Permission expressions are validated both pre-expansion (catches typos before mutations) and post-expansion (catches cross-resource reference errors in the fully expanded graph).
+- **Model templates as data carriers** — `V1WorkspacePermission`, `CascadeDeletePolicy`, and `ResourceAnnotation` are parameterized TypeSpec models that carry string parameters. Expansion logic is owned by providers (RBAC).
 
 ### The 7 Mutations Per Extension
 
@@ -165,21 +167,23 @@ schema/                          Service schemas (teams own their files)
 src/                             TypeSpec emitter plugin
   index.ts                         Package entry: exports $lib, $onEmit, decorators
   lib.ts                           Emitter library definition, state keys, barrel re-exports
-  emitter.ts                       $onEmit — pipeline orchestrator
+  emitter.ts                       $onEmit — provider-registry-driven pipeline orchestrator
   types.ts                         Core interfaces: ResourceDef, RelationBody, ServiceMetadata
   primitives.ts                    Graph builders: ref, subref, or, and, addRelation, hasRelation
   utils.ts                         Shared helpers: bodyToZed, slotName, flattenAnnotations, etc.
   decorators.ts                    Decorator implementations: $cascadePolicy, $annotation
   discover-resources.ts            Resource graph extraction from the TypeSpec AST
+  discover-templates.ts            Platform template discovery (AST walking, alias resolution)
   discover-decorated.ts            Decorator-state-based discovery (cascade, annotations)
+  provider-registry.ts             KesselProvider interface + registerProvider / getProviders
   expand-cascade.ts                Platform cascade-delete expansion
   generate.ts                      Output generators: SpiceDB, metadata, JSON Schema
   safety.ts                        Pre/post-expansion permission expression validation
   providers/rbac/
-    rbac-provider.ts               RBAC provider: V1 discovery, expansion (7 mutations), scaffold
+    rbac-provider.ts               RBAC domain logic: expansion (7 mutations), scaffold
 
 test/                            Tests (Vitest)
-  unit/                            Pure unit tests per module
+  unit/                            Pure unit tests per module (13 files)
   integration/                     Full pipeline integration tests
   helpers/
     pipeline.ts                    compilePipeline() — end-to-end test runner
@@ -198,17 +202,15 @@ test/                            Tests (Vitest)
 
 ## Documentation
 
-| Document | Scope |
-|----------|-------|
-| [Architecture Guide](docs/Architecture-Guide.md) | Full technical reference — types, modules, flow, tests, CI |
-| [Code Flow](docs/Code-Flow.md) | Pipeline stages with Mermaid diagrams |
-| [Service Developer Walkthrough](docs/Service-Developer-Walkthrough.md) | Service team guide — add resources, permissions, extensions |
-| [Service Provider Integration Guide](docs/Service-Provider-Integration-Guide.md) | How to integrate as a service team or RBAC maintainer |
-| [Design Document](docs/TypeSpec-POC-Design-Document.md) | Design principles, decisions, comparison with Starlark/CUE |
-| [Implementation Notes](docs/Emitter-Plugin-Roadmap.md) | Migration decisions from CLI to emitter plugin |
+See **[docs/Guide.md](docs/Guide.md)** — single end-to-end reference covering:
+
+- Pipeline flow (compile → discover → expand → validate → emit)
+- Service developer guide (add services, resources, permissions)
+- Provider developer guide (build new expansion providers)
+- Architecture, testing, and design decisions
 
 ## Risks and Tradeoffs
 
 - **Node.js in CI** for `tsp` + TypeScript build
-- **New extension types** require new decorator + discovery logic + expansion in a provider
+- **New extension providers** implement `KesselProvider` interface, use shared `discoverTemplateInstances()`, and self-register — no emitter edits beyond a side-effect import
 - **Two JSON Schema paths** — built-in `@jsonSchema` emit vs unified schema (both run via `tspconfig.yaml`)

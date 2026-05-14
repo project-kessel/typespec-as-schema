@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 import { compile, NodeHost, type Program } from "@typespec/compiler";
 import type { ResourceDef, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry } from "../../src/types.js";
 import type { ValidationDiagnostic } from "../../src/safety.js";
+import type { MetadataContribution } from "../../src/provider-registry.js";
 import { discoverResources } from "../../src/discover-resources.js";
 import { discoverDecoratedCascadePolicies, discoverDecoratedAnnotations } from "../../src/discover-decorated.js";
 import { generateSpiceDB, generateUnifiedJsonSchemas } from "../../src/generate.js";
@@ -15,6 +16,7 @@ import {
   expandV1Permissions,
   wireDeleteScaffold,
   discoverV1Permissions,
+  rbacProvider,
   type V1Extension,
 } from "../../src/providers/rbac/rbac-provider.js";
 
@@ -28,6 +30,7 @@ const distEntry = path.resolve(pocRoot, "dist/index.js");
 export interface PipelineResult {
   resources: ResourceDef[];
   permissions: V1Extension[];
+  metadataContributions: MetadataContribution[];
   annotations: Map<string, AnnotationEntry[]>;
   cascadePolicies: CascadeDeleteEntry[];
   fullSchema: ResourceDef[];
@@ -72,9 +75,15 @@ export async function compilePipeline(): Promise<PipelineResult> {
   const spicedbOutput = generateSpiceDB(fullSchema);
   const unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema, ownedNamespaces);
 
+  const metadataContributions: MetadataContribution[] = [];
+  if (rbacProvider.contributeMetadata) {
+    metadataContributions.push(rbacProvider.contributeMetadata({ data: permissions, warnings: [] }));
+  }
+
   return {
     resources,
     permissions,
+    metadataContributions,
     annotations,
     cascadePolicies,
     fullSchema,
