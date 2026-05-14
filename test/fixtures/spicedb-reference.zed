@@ -18,44 +18,44 @@ definition rbac/role {
     permission any_any_any = t_any_any_any
     permission inventory_any_any = t_inventory_any_any
     permission inventory_hosts_any = t_inventory_hosts_any
-    permission inventory_any_read = t_inventory_any_read
-    permission inventory_hosts_read = t_inventory_hosts_read
     permission inventory_any_write = t_inventory_any_write
     permission inventory_hosts_write = t_inventory_hosts_write
+    permission inventory_any_read = t_inventory_any_read
+    permission inventory_hosts_read = t_inventory_hosts_read
     permission remediations_any_any = t_remediations_any_any
     permission remediations_remediations_any = t_remediations_remediations_any
-    permission remediations_any_read = t_remediations_any_read
-    permission remediations_remediations_read = t_remediations_remediations_read
     permission remediations_any_write = t_remediations_any_write
     permission remediations_remediations_write = t_remediations_remediations_write
-    permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read
+    permission remediations_any_read = t_remediations_any_read
+    permission remediations_remediations_read = t_remediations_remediations_read
     permission inventory_host_update = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_write + inventory_hosts_write
-    permission remediations_remediation_view = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_read + remediations_remediations_read
+    permission inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read
     permission remediations_remediation_update = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_write + remediations_remediations_write
+    permission remediations_remediation_view = any_any_any + remediations_any_any + remediations_remediations_any + remediations_any_read + remediations_remediations_read
     permission delete = any_any_any
 
     relation t_any_any_any: rbac/principal:*
     relation t_inventory_any_any: rbac/principal:*
     relation t_inventory_hosts_any: rbac/principal:*
-    relation t_inventory_any_read: rbac/principal:*
-    relation t_inventory_hosts_read: rbac/principal:*
     relation t_inventory_any_write: rbac/principal:*
     relation t_inventory_hosts_write: rbac/principal:*
+    relation t_inventory_any_read: rbac/principal:*
+    relation t_inventory_hosts_read: rbac/principal:*
     relation t_remediations_any_any: rbac/principal:*
     relation t_remediations_remediations_any: rbac/principal:*
-    relation t_remediations_any_read: rbac/principal:*
-    relation t_remediations_remediations_read: rbac/principal:*
     relation t_remediations_any_write: rbac/principal:*
     relation t_remediations_remediations_write: rbac/principal:*
+    relation t_remediations_any_read: rbac/principal:*
+    relation t_remediations_remediations_read: rbac/principal:*
 }
 
 definition rbac/role_binding {
     permission subject = t_subject
     permission granted = t_granted
-    permission inventory_host_view = (subject & t_granted->inventory_host_view)
     permission inventory_host_update = (subject & t_granted->inventory_host_update)
-    permission remediations_remediation_view = (subject & t_granted->remediations_remediation_view)
+    permission inventory_host_view = (subject & t_granted->inventory_host_view)
     permission remediations_remediation_update = (subject & t_granted->remediations_remediation_update)
+    permission remediations_remediation_view = (subject & t_granted->remediations_remediation_view)
     permission delete = (subject & t_granted->delete)
 
     relation t_subject: rbac/principal
@@ -65,10 +65,10 @@ definition rbac/role_binding {
 definition rbac/workspace {
     permission parent = t_parent
     permission binding = t_binding
-    permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view
     permission inventory_host_update = t_binding->inventory_host_update + t_parent->inventory_host_update
-    permission remediations_remediation_view = t_binding->remediations_remediation_view + t_parent->remediations_remediation_view
+    permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view
     permission remediations_remediation_update = t_binding->remediations_remediation_update + t_parent->remediations_remediation_update
+    permission remediations_remediation_view = t_binding->remediations_remediation_view + t_parent->remediations_remediation_view
     permission view_metadata = inventory_host_view + remediations_remediation_view
     permission delete = t_binding->delete + t_parent->delete
 

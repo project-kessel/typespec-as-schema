@@ -43,6 +43,7 @@ export const StateKeys = {
   kesselExtension: $lib.createStateSymbol("kesselExtension"),
   cascadePolicy: $lib.createStateSymbol("cascadePolicy"),
   annotation: $lib.createStateSymbol("annotation"),
+  v1Permission: $lib.createStateSymbol("v1Permission"),
 };
 
 // ─── Public API re-exports ───────────────────────────────────────────
@@ -71,6 +72,8 @@ export {
 } from "./utils.js";
 
 export { ref, subref, or, and, addRelation, hasRelation } from "./primitives.js";
+
+export { ResourceGraph, ResourceHandle } from "./resource-graph.js";
 
 export { discoverResources } from "./discover-resources.js";
 

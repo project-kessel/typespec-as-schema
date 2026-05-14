@@ -71,3 +71,8 @@ model BoolRelation<Target> {
   @doc("boolean assignable to target type wildcard")
   __target: Target;
 }
+
+// ─── Convenience Aliases ─────────────────────────────────────────────
+
+/** Shorthand for a permission that delegates to a workspace sub-relation. */
+alias WorkspacePermission<Name extends string> = Permission<SubRef<"workspace", Name>>;

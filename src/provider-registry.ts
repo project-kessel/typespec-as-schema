@@ -12,9 +12,10 @@
 
 import type { Program } from "@typespec/compiler";
 import type { ResourceDef } from "./types.js";
+import { ResourceGraph } from "./resource-graph.js";
 import { discoverTemplateInstances, type TemplateDef } from "./discover-templates.js";
 
-// ─── Provider contract ───────────────────────────────────────────────
+// ─── Provider contract (emitter-facing, stable) ─────────────────────
 
 export interface ProviderDiscoveryResult {
   data: unknown;
@@ -46,7 +47,7 @@ export interface KesselProvider {
   contributeMetadata?(discovery: ProviderDiscoveryResult): MetadataContribution;
 }
 
-// ─── defineProvider ──────────────────────────────────────────────────
+// ─── defineProvider (author-facing, uses ResourceGraph) ──────────────
 
 export interface ProviderTemplateConfig {
   name: string;
@@ -58,47 +59,86 @@ export interface ProviderTemplateConfig {
 export interface ProviderConfig<T> {
   name: string;
   ownedNamespaces: string[];
-  template: ProviderTemplateConfig;
-  expand(resources: ResourceDef[], data: T[]): ProviderExpansionResult;
-  postExpand?(resources: ResourceDef[]): ResourceDef[];
+
+  /** Decorator-based discovery: read entries from this state key. */
+  stateKey?: symbol;
+
+  /** Template-based discovery (backward compat). */
+  template?: ProviderTemplateConfig;
+
+  filter?: (data: T) => boolean;
+
+  expand(graph: ResourceGraph, data: T[]): void;
+  postExpand?(graph: ResourceGraph): void;
   contributeMetadata?(data: T[]): MetadataContribution;
 }
 
 /**
  * High-level helper that constructs and registers a KesselProvider from
  * pure domain logic. The provider author supplies only an expansion function,
- * a template descriptor, and optional hooks — all discovery, registration,
- * and contract plumbing is handled by the platform.
+ * a state key or template descriptor, and optional hooks — all discovery,
+ * registration, and contract plumbing is handled by the platform.
  */
 export function defineProvider<T>(config: ProviderConfig<T>): KesselProvider {
-  const templateDef: TemplateDef = {
-    templateName: config.template.name,
-    paramNames: config.template.params,
-    namespace: config.template.namespace ?? "Kessel",
-  };
-
   const provider: KesselProvider = {
     name: config.name,
     ownedNamespaces: config.ownedNamespaces,
 
     discover(program: Program): ProviderDiscoveryResult {
-      const { results, skipped } = discoverTemplateInstances(program, templateDef);
-      const filtered = config.template.filter
-        ? results.filter(config.template.filter)
-        : results;
-      return { data: filtered as unknown as T[], warnings: skipped };
+      if (config.stateKey) {
+        const stateMap = program.stateMap(config.stateKey);
+        const allData: T[] = [];
+        for (const [, entries] of stateMap) {
+          const arr = entries as T[];
+          if (Array.isArray(arr)) {
+            allData.push(...arr);
+          }
+        }
+        const filtered = config.filter
+          ? allData.filter(config.filter)
+          : allData;
+        return { data: filtered, warnings: [] };
+      }
+
+      if (config.template) {
+        const templateDef: TemplateDef = {
+          templateName: config.template.name,
+          paramNames: config.template.params,
+          namespace: config.template.namespace ?? "Kessel",
+        };
+        const { results, skipped } = discoverTemplateInstances(
+          program,
+          templateDef,
+        );
+        const filtered = config.template.filter
+          ? results.filter(config.template.filter)
+          : results;
+        return { data: filtered as unknown as T[], warnings: skipped };
+      }
+
+      return { data: [] as T[], warnings: [] };
     },
 
-    expand(resources: ResourceDef[], discovery: ProviderDiscoveryResult): ProviderExpansionResult {
-      return config.expand(resources, discovery.data as T[]);
+    expand(
+      resources: ResourceDef[],
+      discovery: ProviderDiscoveryResult,
+    ): ProviderExpansionResult {
+      const graph = new ResourceGraph(resources);
+      config.expand(graph, discovery.data as T[]);
+      return { resources: graph.toResources(), warnings: graph.warnings };
     },
 
     postExpand: config.postExpand
-      ? (resources: ResourceDef[]) => config.postExpand!(resources)
+      ? (resources: ResourceDef[]): ResourceDef[] => {
+          const graph = new ResourceGraph(resources);
+          config.postExpand!(graph);
+          return graph.toResources();
+        }
       : undefined,
 
     contributeMetadata: config.contributeMetadata
-      ? (discovery: ProviderDiscoveryResult) => config.contributeMetadata!(discovery.data as T[])
+      ? (discovery: ProviderDiscoveryResult) =>
+          config.contributeMetadata!(discovery.data as T[])
       : undefined,
   };
 

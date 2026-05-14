@@ -15,10 +15,10 @@ import {
 import {
   expandV1Permissions,
   wireDeleteScaffold,
-  discoverV1Permissions,
   rbacProvider,
   type V1Extension,
 } from "../../src/providers/rbac/rbac-provider.js";
+import { ResourceGraph } from "../../src/resource-graph.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,9 +43,6 @@ export interface PipelineResult {
 }
 
 export async function compilePipeline(): Promise<PipelineResult> {
-  // Import the dist entry so the TypeSpec compiler can resolve extern dec
-  // implementations ($cascadePolicy, $annotation, $kesselExtension).
-  // Without this, state sets remain empty during programmatic compile().
   const program: Program = await compile(NodeHost, mainTsp, {
     noEmit: true,
     additionalImports: [distEntry],
@@ -53,7 +50,12 @@ export async function compilePipeline(): Promise<PipelineResult> {
   const warnings: string[] = [];
 
   const { resources } = discoverResources(program);
-  const permissions = discoverV1Permissions(program);
+
+  // Discover permissions via the provider's discover method
+  const discovery = rbacProvider.discover(program);
+  const permissions = discovery.data as V1Extension[];
+  warnings.push(...discovery.warnings);
+
   const annotations = discoverDecoratedAnnotations(program);
   const cascadePolicies = discoverDecoratedCascadePolicies(program);
 
@@ -62,10 +64,16 @@ export async function compilePipeline(): Promise<PipelineResult> {
     warnings.push(`Pre-expansion: ${d.resource}.${d.relation}: ${d.message}`);
   }
 
-  const { resources: afterRbac, warnings: rbacWarnings } = expandV1Permissions(resources, permissions);
-  warnings.push(...rbacWarnings);
+  // Expand using ResourceGraph (same as provider internals)
+  const expandGraph = new ResourceGraph(resources);
+  expandV1Permissions(expandGraph, permissions);
+  const afterRbac = expandGraph.toResources();
+  warnings.push(...expandGraph.warnings);
 
-  const scaffolded = wireDeleteScaffold(afterRbac);
+  const scaffoldGraph = new ResourceGraph(afterRbac);
+  wireDeleteScaffold(scaffoldGraph);
+  const scaffolded = scaffoldGraph.toResources();
+
   const cascadeResult = expandCascadeDeletePolicies(scaffolded, cascadePolicies);
   const fullSchema = cascadeResult.resources;
   warnings.push(...cascadeResult.warnings);

@@ -5,4 +5,11 @@
 
 export { $lib } from "./lib.js";
 export { $onEmit } from "./emitter.js";
-export { $kesselExtension, $cascadePolicy, $annotation } from "./decorators.js";
+export {
+  $kesselExtension,
+  $cascadePolicy,
+  $annotation,
+  $v1Permission,
+  $cascadeDelete,
+  $resourceAnnotation,
+} from "./decorators.js";
