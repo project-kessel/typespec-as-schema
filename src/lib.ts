@@ -92,14 +92,18 @@ export {
 } from "./discover-templates.js";
 
 export {
-  defineProvider,
-  registerProvider,
-  getProviders,
-  clearProviders,
-  type ProviderConfig,
-  type ProviderTemplateConfig,
-  type KesselProvider,
-  type ProviderDiscoveryResult,
-  type ProviderExpansionResult,
+  expandV1Permissions,
+  wireDeleteScaffold,
+  wirePermissionRelations,
+  discoverV1Permissions,
+  buildPermissionsByApp,
+  verbToRelationName,
+  isKesselVerb,
+  VALID_VERBS,
+  type V1Extension,
+  type PermissionsByApp,
+} from "./expand-v1.js";
+
+export {
   type MetadataContribution,
-} from "./provider-registry.js";
+} from "./generate.js";

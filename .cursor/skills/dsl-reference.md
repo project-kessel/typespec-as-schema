@@ -30,6 +30,16 @@ relation t_workspace: rbac/workspace
 permission workspace = t_workspace
 ```
 
+### Pre-composed Aliases (`lib/aliases.tsp`)
+
+| Alias | Expands to | Use |
+|---|---|---|
+| `WorkspaceRef` | `Assignable<RBAC.Workspace, Cardinality.ExactlyOne>` | Every service resource's workspace relation |
+
+```typespec
+workspace: WorkspaceRef
+```
+
 ### Permission
 
 A computed permission derived from set operations on other relations.
@@ -43,8 +53,6 @@ Expression types:
 - `SubRef<"rel", "sub">` → arrow (subref): `t_rel->sub`
 - `Or<A, B>` → union: `A + B`
 - `And<A, B>` → intersection: `(A & B)`
-- `a->b` → arrow: `t_a->b`
-- Parentheses for grouping: `(a + b) & c`
 
 ### BoolRelation
 
@@ -60,100 +68,108 @@ relation t_isAdmin: rbac/principal:*
 permission isAdmin = t_isAdmin
 ```
 
-## Extension Templates (`lib/kessel-extensions.tsp`)
+## Decorators
 
-### V1WorkspacePermission
+### @v1Permission
 
-Maps a legacy `application:resource:verb` triple to a v2 permission on the RBAC workspace.
+Registers a V1 workspace permission. Triggers 7 RBAC mutations and auto-wires a permission relation on the resource model.
 
 ```typespec
-alias x = Kessel.V1WorkspacePermission<App, Resource, Verb, V2Perm>
+@v1Permission("inventory", "hosts", "read", "inventory_host_view")
+model Host {
+  workspace: WorkspaceRef;
+}
 ```
 
-Parameters:
-- `App` — lowercase application identifier
-- `Resource` — lowercase resource identifier (plural)
-- `Verb` — `"read" | "write" | "create" | "delete"`
-- `V2Perm` — snake_case v2 permission name
+Parameters: `(application, resource, verb, v2PermissionName)`
+
+Auto-wired relations by verb:
+
+| Verb | Relation |
+|------|----------|
+| `read` | `view` |
+| `write` | `update` |
+| `create` | `create` |
+| `delete` | `delete` |
+
+### @cascadeDelete
+
+Wires a `delete` permission on the resource through the parent relation. Also creates the full RBAC chain (role → role_binding → workspace → child).
+
+```typespec
+@cascadeDelete("workspace")
+model Template {
+  workspace: WorkspaceRef;
+}
+```
+
+Parameter: `(parentRelation)` — the relation name on the child pointing to the parent.
+
+App and resource names are inferred from the namespace and model name.
+
+### @resourceAnnotation
+
+Attaches non-RBAC metadata to a resource. Appears in metadata JSON but not in SpiceDB output.
+
+```typespec
+@resourceAnnotation("retention_days", "365")
+model Template {
+  workspace: WorkspaceRef;
+}
+```
+
+Parameters: `(key, value)` — both strings.
+
+App and resource names are inferred from the namespace and model name.
+
+## Extension Templates (`lib/kessel-extensions.tsp`)
+
+### V1WorkspacePermission (type definition)
+
+The underlying template type used by `@v1Permission`. Service authors should use the decorator instead of referencing this template directly.
+
+```typespec
+model V1WorkspacePermission<App, Resource, Verb, V2Perm> { ... }
+```
 
 ### CascadeDeletePolicy
 
-Adds a `delete` permission on a child resource that resolves through the parent relation.
-Also wires `delete` through the full RBAC chain (role → role_binding → workspace → child)
-so every arrow reference resolves to an existing permission.
-
 ```typespec
-alias x = Kessel.CascadeDeletePolicy<ChildApp, ChildResource, ParentRelation>
+model CascadeDeletePolicy<ChildApp, ChildResource, ParentRelation> { ... }
 ```
-
-Parameters:
-- `ChildApp` — application owning the child resource
-- `ChildResource` — child resource name
-- `ParentRelation` — relation on the child pointing to the parent
-
-Generated RBAC chain:
-- `rbac/role`: `permission delete = any_any_any`
-- `rbac/role_binding`: `permission delete = (subject & t_granted->delete)`
-- `rbac/workspace`: `permission delete = t_binding->delete + t_parent->delete`
-- Child resource: `permission delete = t_{parentRelation}->delete`
 
 ### ResourceAnnotation
 
-Attaches non-RBAC metadata to a resource. Appears in the IR but not in SpiceDB output.
-
 ```typespec
-alias x = Kessel.ResourceAnnotation<Application, Resource, Key, Value>
+model ResourceAnnotation<Application, Resource, Key, Value> { ... }
 ```
 
 ## CLI Commands
 
 ```bash
-# Generate SpiceDB schema
-npx tsx src/spicedb-emitter.ts schema/main.tsp
+# Generate SpiceDB schema (default)
+npx tsp compile schema/main.tsp
 
 # Generate metadata JSON
-npx tsx src/spicedb-emitter.ts schema/main.tsp --metadata
-
-# Generate IR (for Go consumer)
-npx tsx src/spicedb-emitter.ts schema/main.tsp --ir go-loader-example/schema/resources.json
+npx tsp compile schema/main.tsp --option typespec-as-schema.output-format=metadata
 
 # Generate unified JSON schemas
-npx tsx src/spicedb-emitter.ts schema/main.tsp --unified-jsonschema
+npx tsp compile schema/main.tsp --option typespec-as-schema.output-format=unified-jsonschema
 
-# Preview a specific extension's mutations
-npx tsx src/spicedb-emitter.ts schema/main.tsp --preview inventory_host_view
-
-# Generate annotations JSON
-npx tsx src/spicedb-emitter.ts schema/main.tsp --annotations
-
-# Skip permission expression validation failures
-npx tsx src/spicedb-emitter.ts schema/main.tsp --no-strict
+# Strict mode (post-expansion validation failures → errors)
+npx tsp compile schema/main.tsp --option typespec-as-schema.strict=true
 
 # Run tests
 npx vitest run
 ```
 
-## Architecture
+## Naming Conventions
 
-```
-schema/*.tsp          →  TypeSpec Compiler  →  Type Graph
-                                                    ↓
-                              discover.ts:  discoverResources()
-                                            discoverV1Permissions()
-                                            discoverAnnotations()
-                                            discoverCascadeDeletePolicies()
-                                                    ↓
-                              expand.ts:    expandV1Permissions()
-                                            expandCascadeDeletePolicies()
-                                                    ↓
-                              generate.ts:  generateSpiceDB()
-                                            generateMetadata()
-                                            generateUnifiedJsonSchemas()
-                                            generateIR()
-
-  Orchestration:  pipeline.ts (compilePipeline)
-  Registry:       registry.ts (EXTENSION_TEMPLATES — template names, params, namespaces)
-  Shared helpers: utils.ts (bodyToZed, slotName, findResource, cloneResources, isAssignable)
-```
-
-Trust boundary: service authors write `schema/*.tsp` (declarative); discovery lives in `src/discover.ts`; expansion logic lives in platform-owned `src/expand.ts`.
+| Element | Convention | Example |
+|---------|------------|---------|
+| Namespace | PascalCase in TypeSpec | `Inventory` → `inventory/` in SpiceDB |
+| Resource model | PascalCase | `Host` → `inventory/host` |
+| V2 permission | `{app}_{resource}_{action}` | `inventory_host_view` |
+| Relation slot in Zed | `t_{relation}` | `t_workspace` |
+| Application | lowercase, underscore separated | `content_sources` |
+| Resource (in decorator) | lowercase plural | `hosts`, `templates` |

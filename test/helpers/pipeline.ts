@@ -3,7 +3,7 @@ import { fileURLToPath } from "url";
 import { compile, NodeHost, type Program } from "@typespec/compiler";
 import type { ResourceDef, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry } from "../../src/types.js";
 import type { ValidationDiagnostic } from "../../src/safety.js";
-import type { MetadataContribution } from "../../src/provider-registry.js";
+import type { MetadataContribution } from "../../src/generate.js";
 import { discoverResources } from "../../src/discover-resources.js";
 import { discoverDecoratedCascadePolicies, discoverDecoratedAnnotations } from "../../src/discover-decorated.js";
 import { generateSpiceDB, generateUnifiedJsonSchemas } from "../../src/generate.js";
@@ -13,11 +13,13 @@ import {
   validatePermissionExpressions,
 } from "../../src/safety.js";
 import {
+  discoverV1Permissions,
   expandV1Permissions,
   wireDeleteScaffold,
-  rbacProvider,
+  wirePermissionRelations,
+  buildPermissionsByApp,
   type V1Extension,
-} from "../../src/providers/rbac/rbac-provider.js";
+} from "../../src/expand-v1.js";
 import { ResourceGraph } from "../../src/resource-graph.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,21 +52,18 @@ export async function compilePipeline(): Promise<PipelineResult> {
   const warnings: string[] = [];
 
   const { resources } = discoverResources(program);
-
-  // Discover permissions via the provider's discover method
-  const discovery = rbacProvider.discover(program);
-  const permissions = discovery.data as V1Extension[];
-  warnings.push(...discovery.warnings);
+  const permissions = discoverV1Permissions(program);
 
   const annotations = discoverDecoratedAnnotations(program);
   const cascadePolicies = discoverDecoratedCascadePolicies(program);
+
+  wirePermissionRelations(resources, permissions);
 
   const preExpansionDiagnostics = validatePreExpansionExpressions(resources);
   for (const d of preExpansionDiagnostics) {
     warnings.push(`Pre-expansion: ${d.resource}.${d.relation}: ${d.message}`);
   }
 
-  // Expand using ResourceGraph (same as provider internals)
   const expandGraph = new ResourceGraph(resources);
   expandV1Permissions(expandGraph, permissions);
   const afterRbac = expandGraph.toResources();
@@ -83,10 +82,8 @@ export async function compilePipeline(): Promise<PipelineResult> {
   const spicedbOutput = generateSpiceDB(fullSchema);
   const unifiedJsonSchemas = generateUnifiedJsonSchemas(fullSchema, ownedNamespaces);
 
-  const metadataContributions: MetadataContribution[] = [];
-  if (rbacProvider.contributeMetadata) {
-    metadataContributions.push(rbacProvider.contributeMetadata({ data: permissions, warnings: [] }));
-  }
+  const permissionsByApp = buildPermissionsByApp(permissions);
+  const metadataContributions: MetadataContribution[] = [{ permissionsByApp }];
 
   return {
     resources,

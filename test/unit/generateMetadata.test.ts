@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateMetadata, type ResourceDef } from "../../src/lib.js";
-import type { MetadataContribution } from "../../src/provider-registry.js";
+import { generateMetadata, type ResourceDef, type MetadataContribution } from "../../src/lib.js";
 
 describe("generateMetadata", () => {
   const inventoryContribution: MetadataContribution = {

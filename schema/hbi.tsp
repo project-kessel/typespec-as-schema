@@ -3,9 +3,7 @@
 // and permissions derived from RBAC workspace permission extensions.
 
 import "@typespec/json-schema";
-import "../lib/kessel.tsp";
-import "../lib/decorators.tsp";
-import "./rbac/rbac.tsp";
+import "../lib/main.tsp";
 
 using JsonSchema;
 using Kessel;
@@ -46,14 +44,8 @@ model HostData {
 @resourceAnnotation("retention_days", "90")
 model Host {
   /** Every host belongs to exactly one RBAC workspace */
-  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
+  workspace: WorkspaceRef;
 
   /** Host data fields with validation */
   data: HostData;
-
-  /** View permission: resolves to workspace->inventory_host_view */
-  view: WorkspacePermission<"inventory_host_view">;
-
-  /** Update permission: resolves to workspace->inventory_host_update */
-  update: WorkspacePermission<"inventory_host_update">;
 }

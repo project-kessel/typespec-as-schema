@@ -1,24 +1,27 @@
 // Kessel Emitter Plugin — $onEmit
 //
-// The registered TypeSpec emitter entry point. Replaces the standalone
-// CLI pipelines (spicedb-emitter.ts, emitter-v2.ts, emitter-v3.ts)
-// with a single `tsp compile` invocation.
-//
-// Providers register themselves via the provider registry; the emitter
-// loops over them for discovery, expansion, and metadata contribution.
+// The TypeSpec emitter entry point. Discovers resources, permissions,
+// cascade policies, and annotations from the compiled program, then
+// expands RBAC relations and generates output artifacts.
 
 import { type EmitContext, emitFile, resolvePath } from "@typespec/compiler";
 import type { KesselEmitterOptions } from "./lib.js";
 import { discoverDecoratedCascadePolicies, discoverDecoratedAnnotations } from "./discover-decorated.js";
 import { discoverResources } from "./discover-resources.js";
-import { getProviders, type ProviderDiscoveryResult, type MetadataContribution } from "./provider-registry.js";
-import "./providers/rbac/rbac-provider.js";
+import {
+  discoverV1Permissions,
+  expandV1Permissions,
+  wireDeleteScaffold,
+  wirePermissionRelations,
+  buildPermissionsByApp,
+} from "./expand-v1.js";
 import { expandCascadeDeletePolicies } from "./expand-cascade.js";
 import { generateSpiceDB, generateUnifiedJsonSchemas, generateMetadata } from "./generate.js";
 import {
   validatePreExpansionExpressions,
   validatePermissionExpressions,
 } from "./safety.js";
+import { ResourceGraph } from "./resource-graph.js";
 
 export async function $onEmit(context: EmitContext<KesselEmitterOptions>) {
   if (context.program.compilerOptions.noEmit) return;
@@ -28,48 +31,38 @@ export async function $onEmit(context: EmitContext<KesselEmitterOptions>) {
   const strict = context.options.strict ?? false;
   const warnings: string[] = [];
 
-  // ─── 1. Platform discovery ─────────────────────────────────────
+  // ─── 1. Discovery ───────────────────────────────────────────────
   const { resources: baseResources } = discoverResources(program);
+  const permissions = discoverV1Permissions(program);
   const cascadePolicies = discoverDecoratedCascadePolicies(program);
   const annotations = discoverDecoratedAnnotations(program);
 
-  // ─── 2. Provider discovery ─────────────────────────────────────
-  const providers = getProviders();
-  const discoveryResults = new Map<string, ProviderDiscoveryResult>();
-  for (const provider of providers) {
-    const result = provider.discover(program);
-    discoveryResults.set(provider.name, result);
-    warnings.push(...result.warnings);
-  }
+  // ─── 2. Auto-wire permission relations from @v1Permission ───────
+  wirePermissionRelations(baseResources, permissions);
 
-  // ─── 3. Pre-expansion validation ──────────────────────────────
+  // ─── 3. Pre-expansion validation ────────────────────────────────
   const preExpansionDiags = validatePreExpansionExpressions(baseResources);
   for (const d of preExpansionDiags) {
     warnings.push(`Pre-expansion: ${d.resource}.${d.relation}: ${d.message}`);
   }
 
-  // ─── 4. Provider expansion ────────────────────────────────────
-  let resources = baseResources;
-  for (const provider of providers) {
-    const discovery = discoveryResults.get(provider.name)!;
-    const expanded = provider.expand(resources, discovery);
-    resources = expanded.resources;
-    warnings.push(...expanded.warnings);
-  }
+  // ─── 4. V1 permission expansion ─────────────────────────────────
+  const expandGraph = new ResourceGraph(baseResources);
+  expandV1Permissions(expandGraph, permissions);
+  const afterExpansion = expandGraph.toResources();
+  warnings.push(...expandGraph.warnings);
 
-  // ─── 5. Provider post-expansion ───────────────────────────────
-  for (const provider of providers) {
-    if (provider.postExpand) {
-      resources = provider.postExpand(resources);
-    }
-  }
+  // ─── 5. Delete scaffold wiring ──────────────────────────────────
+  const scaffoldGraph = new ResourceGraph(afterExpansion);
+  wireDeleteScaffold(scaffoldGraph);
+  const scaffolded = scaffoldGraph.toResources();
 
-  // ─── 6. Cascade-delete expansion ──────────────────────────────
-  const cascadeResult = expandCascadeDeletePolicies(resources, cascadePolicies);
+  // ─── 6. Cascade-delete expansion ────────────────────────────────
+  const cascadeResult = expandCascadeDeletePolicies(scaffolded, cascadePolicies);
   const fullSchema = cascadeResult.resources;
   warnings.push(...cascadeResult.warnings);
 
-  // ─── 7. Post-expansion validation ─────────────────────────────
+  // ─── 7. Post-expansion validation ───────────────────────────────
   const diagnostics = validatePermissionExpressions(fullSchema);
   if (diagnostics.length > 0 && strict) {
     for (const d of diagnostics) {
@@ -82,20 +75,12 @@ export async function $onEmit(context: EmitContext<KesselEmitterOptions>) {
     }
   }
 
-  // ─── 8. Collect provider metadata and owned namespaces ────────
-  const ownedNamespaces = new Set<string>();
-  const metadataContributions: MetadataContribution[] = [];
-  for (const provider of providers) {
-    for (const ns of provider.ownedNamespaces) {
-      ownedNamespaces.add(ns);
-    }
-    if (provider.contributeMetadata) {
-      const discovery = discoveryResults.get(provider.name)!;
-      metadataContributions.push(provider.contributeMetadata(discovery));
-    }
-  }
+  // ─── 8. Build metadata ──────────────────────────────────────────
+  const permissionsByApp = buildPermissionsByApp(permissions);
+  const metadataContributions = [{ permissionsByApp }];
+  const ownedNamespaces = new Set(["rbac"]);
 
-  // ─── 9. Emit based on output format ───────────────────────────
+  // ─── 9. Emit based on output format ─────────────────────────────
   switch (format) {
     case "spicedb": {
       const spicedbOutput = generateSpiceDB(fullSchema);

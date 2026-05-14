@@ -6,7 +6,7 @@ import {
   findResource,
   slotName,
 } from "../../src/lib.js";
-import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../src/providers/rbac/rbac-provider.js";
+import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../src/expand-v1.js";
 import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
 import { ResourceGraph } from "../../src/resource-graph.js";
 

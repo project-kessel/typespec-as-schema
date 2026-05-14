@@ -1,11 +1,8 @@
 // Remediations Service Schema
 // Permissions-only service: registers permissions on workspace without
-// defining any resource types. Demonstrates a service that only needs
-// authorization extensions, not data schemas.
+// defining any resource types.
 
-import "../lib/kessel.tsp";
-import "../lib/decorators.tsp";
-import "./rbac/rbac.tsp";
+import "../lib/main.tsp";
 
 using Kessel;
 

@@ -11,26 +11,27 @@ Service teams write `.tsp` files declaring resources and permissions. A register
 
 ┌──────────────┐         ┌──────────────────────┐
 │ lib/         │         │  1. COMPILE           │
-│  kessel.tsp  │         │  TypeSpec compiler    │
-│  kessel-     │────┐    │  parses .tsp into     │
-│  extensions  │    │    │  a typed Program      │
-│  .tsp        │    │    └──────────┬───────────┘
-│  decorators  │    │               │
-│  .tsp        │    │    ┌──────────┴───────────┐
-├──────────────┤    │    │  2. DISCOVER          │
-│ schema/rbac/ │    │    │  Resources + V1 perms │
-│  rbac.tsp    │────┤    │  + cascade policies   │         Outputs
-│  rbac-ext    │    │    │  + annotations        │
-│  .tsp        │    │    └──────────┬───────────┘  ┌────────────────────┐
-├──────────────┤    │               │              │ SpiceDB .zed       │
-│ schema/      │    │    ┌──────────┴───────────┐  │ (default)          │
-│  main.tsp    │────┤    │  3. VALIDATE (pre)    │  ├────────────────────┤
-│  hbi.tsp     │────┤    │  expression refs      │  │ Metadata JSON      │
-│  remediations│    │    └──────────┬───────────┘  ├────────────────────┤
-│  .tsp        │────┘               │              │ Unified JSON Schema│
-└──────────────┘         ┌──────────┴───────────┐  └─────────▲──────────┘
+│  main.tsp    │         │  TypeSpec compiler    │
+│  kessel.tsp  │────┐    │  parses .tsp into     │
+│  aliases.tsp │    │    │  a typed Program      │
+│  decorators  │    │    └──────────┬───────────┘
+│  .tsp        │    │               │
+├──────────────┤    │    ┌──────────┴───────────┐
+│ schema/rbac/ │    │    │  2. DISCOVER          │
+│  rbac.tsp    │────┤    │  Resources + V1 perms │
+│  rbac-ext    │    │    │  + cascade policies   │         Outputs
+│  .tsp        │    │    │  + annotations        │
+├──────────────┤    │    └──────────┬───────────┘  ┌────────────────────┐
+│ schema/      │    │               │              │ SpiceDB .zed       │
+│  main.tsp    │────┤    ┌──────────┴───────────┐  │ (default)          │
+│  hbi.tsp     │────┤    │  3. AUTO-WIRE + VALID │  ├────────────────────┤
+│  remediations│    │    │  Permission relations  │  │ Metadata JSON      │
+│  .tsp        │────┘    │  + expression refs     │  ├────────────────────┤
+└──────────────┘         └──────────┬───────────┘  │ Unified JSON Schema│
+                                    │              └─────────▲──────────┘
+                         ┌──────────┴───────────┐           │
                          │  4. EXPAND            │           │
-                         │  RBAC: 7 mutations    │           │
+                         │  V1: 7 mutations/perm │           │
                          │  Scaffold + Cascade   │           │
                          └──────────┬───────────┘           │
                                     │                       │
@@ -45,7 +46,8 @@ Service teams write `.tsp` files declaring resources and permissions. A register
                          └──────────────────────┘
 
   Emitter entry point: src/emitter.ts ($onEmit)
-  Custom decorators: @cascadePolicy, @annotation (src/decorators.ts)
+  V1 expansion:        src/expand-v1.ts
+  Custom decorators:   @v1Permission, @cascadeDelete, @resourceAnnotation (src/decorators.ts)
 ```
 
 ## Quick Start
@@ -67,45 +69,47 @@ make demo                                                                       
 
 A service team adds **one `.tsp` file** with two things:
 
-**1. Register permissions** (one alias per permission):
+**1. Register permissions** (decorators on a model):
 
 ```typespec
-alias viewPermission = Kessel.V1WorkspacePermission<
-  "inventory", "hosts", "read", "inventory_host_view"
->;
+@v1Permission("inventory", "hosts", "read", "inventory_host_view")
+@v1Permission("inventory", "hosts", "write", "inventory_host_update")
+model Host {
+  workspace: WorkspaceRef;
+}
 ```
 
-This single line triggers 7 mutations across Role, RoleBinding, and Workspace.
+Each `@v1Permission` triggers 7 mutations across Role, RoleBinding, and Workspace, and auto-wires the corresponding relation on the resource model (`read` → `view`, `write` → `update`).
 
-**2. Define the resource model:**
+**2. Import the facade and register in main.tsp:**
 
 ```typespec
-model Host {
-  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
-  view: Permission<SubRef<"workspace", "inventory_host_view">>;
-  update: Permission<SubRef<"workspace", "inventory_host_update">>;
-}
+import "../lib/main.tsp";  // single import brings in all Kessel types + RBAC
+using Kessel;
 ```
 
 Then add one import to `schema/main.tsp`. Done. No TypeScript changes needed.
 
 ## Architecture
 
+The emitter calls expansion functions directly — no provider registry or abstraction layer.
+
 ```mermaid
 flowchart TB
   subgraph input ["Input (.tsp files)"]
-    lib["lib/\nkessel.tsp\nkessel-extensions.tsp\ndecorators.tsp"]
+    lib["lib/\nmain.tsp (facade)\nkessel.tsp\naliases.tsp\ndecorators.tsp"]
     rbacSchema["schema/rbac/\nrbac.tsp\nrbac-extensions.tsp"]
     schema["schema/\nmain.tsp\nhbi.tsp, remediations.tsp"]
   end
 
   subgraph emitter ["Emitter Plugin (src/)"]
     compile["1. Compile\n@typespec/compiler\n.tsp → typed Program"]
-    discover["2. Discover\ndiscover-resources.ts\ndiscover-decorated.ts\nprovider-registry.ts"]
-    preVal["3. Pre-validate\nsafety.ts"]
-    expand["4. Provider Expand\nprovider.expand()\nprovider.postExpand()\nexpandCascadeDeletePolicies()"]
-    postVal["5. Post-validate\nsafety.ts (strict mode)"]
-    generate["6. Generate + Emit\ngenerate.ts"]
+    discover["2. Discover\ndiscover-resources.ts\ndiscover-decorated.ts\ndiscover-templates.ts"]
+    autowire["3. Auto-wire\nexpand-v1.ts\nwirePermissionRelations()"]
+    preVal["4. Pre-validate\nsafety.ts"]
+    expand["5. Expand\nexpandV1Permissions()\nwireDeleteScaffold()\nexpandCascadeDeletePolicies()"]
+    postVal["6. Post-validate\nsafety.ts (strict mode)"]
+    generate["7. Generate + Emit\ngenerate.ts"]
   end
 
   subgraph outputs ["Outputs (one per invocation)"]
@@ -117,27 +121,24 @@ flowchart TB
   lib --> compile
   rbacSchema --> compile
   schema --> compile
-  compile --> discover --> preVal --> expand --> postVal --> generate
+  compile --> discover --> autowire --> preVal --> expand --> postVal --> generate
   generate --> spicedb
   generate --> meta
   generate --> jsonschema
 ```
 
-### Emitter Plugin Model
+### Key Design Points
 
-This project is a **registered TypeSpec emitter plugin** with custom decorators and a **provider registry**:
-
-- **Provider registry** — `src/provider-registry.ts` defines `KesselProvider` interface. Providers self-register at module load time; the emitter loops over them for discovery, expansion, and metadata contribution. New providers require only new files + a side-effect import.
-- **Shared template discovery** — `src/discover-templates.ts` centralizes all internal compiler API usage (AST walking, alias resolution). Providers declare *what* template they own; the platform handles *how* to find instances.
-- **Custom decorators** — `@cascadePolicy` and `@annotation` (declared in `lib/decorators.tsp`, implemented in `src/decorators.ts`) tag models into compiler state sets for reliable discovery.
-- **`$onEmit` entry point** — `src/emitter.ts` exports `$onEmit`, which the TypeSpec compiler calls after compilation. It orchestrates the full pipeline: discover → pre-validate → provider expand → cascade expand → post-validate → generate.
-- **`$lib` registration** — `src/lib.ts` defines the emitter library with `createTypeSpecLibrary`, including emitter options (`output-format`, `strict`) and custom diagnostics.
+- **Direct pipeline** — `src/emitter.ts` calls `expandV1Permissions()`, `wireDeleteScaffold()`, and `expandCascadeDeletePolicies()` directly. No registry indirection.
+- **Auto-wired relations** — `@v1Permission` decorators trigger automatic injection of permission relations (`view`, `update`, etc.) on resource models, eliminating manual duplication.
+- **Single-import facade** — `lib/main.tsp` imports all core types, RBAC types, decorators, and aliases. Service schemas need only `import "../lib/main.tsp";`.
+- **Pre-composed aliases** — `WorkspaceRef` replaces `Assignable<RBAC.Workspace, Cardinality.ExactlyOne>`.
+- **Custom decorators** — `@v1Permission`, `@cascadeDelete`, and `@resourceAnnotation` (declared in `lib/decorators.tsp`, implemented in `src/decorators.ts`) tag models into compiler state maps for reliable discovery.
 - **Two-pass expression validation** — Permission expressions are validated both pre-expansion (catches typos before mutations) and post-expansion (catches cross-resource reference errors in the fully expanded graph).
-- **Model templates as data carriers** — `V1WorkspacePermission`, `CascadeDeletePolicy`, and `ResourceAnnotation` are parameterized TypeSpec models that carry string parameters. Expansion logic is owned by providers (RBAC).
 
-### The 7 Mutations Per Extension
+### The 7 Mutations Per Permission
 
-When a service declares `V1WorkspacePermission<"inventory", "hosts", "read", "inventory_host_view">`, the expansion function adds:
+When a service declares `@v1Permission("inventory", "hosts", "read", "inventory_host_view")`, the expansion function adds:
 
 | # | Target | What | Example |
 |---|--------|------|---------|
@@ -152,38 +153,39 @@ After all extensions, read-verb permissions are OR'd into `view_metadata` on Wor
 
 ```
 lib/                             Platform types (shared .tsp)
-  kessel.tsp                       Assignable, Permission, BoolRelation, Cardinality
+  main.tsp                        Single-import facade
+  kessel.tsp                      Assignable, Permission, BoolRelation, Cardinality
   kessel-extensions.tsp            Platform templates: CascadeDeletePolicy, ResourceAnnotation
-  decorators.tsp                   extern dec declarations: @cascadePolicy, @annotation
+  aliases.tsp                      Pre-composed aliases: WorkspaceRef
+  decorators.tsp                   extern dec declarations: @v1Permission, @cascadeDelete, @resourceAnnotation
 
 schema/                          Service schemas (teams own their files)
-  main.tsp                         Entrypoint — imports all services
-  hbi.tsp                          Host resource + V1 permission aliases + policies + annotations
+  main.tsp                         Entrypoint — imports lib/main.tsp + all services
+  hbi.tsp                          Host resource + V1 permissions + policies + annotations
   remediations.tsp                 Permissions-only service
   rbac/
     rbac.tsp                       Core RBAC types: Principal, Role, RoleBinding, Workspace
-    rbac-extensions.tsp            RBAC extension template: V1WorkspacePermission
+    rbac-extensions.tsp            V1WorkspacePermission template (type definition)
 
 src/                             TypeSpec emitter plugin
   index.ts                         Package entry: exports $lib, $onEmit, decorators
   lib.ts                           Emitter library definition, state keys, barrel re-exports
-  emitter.ts                       $onEmit — provider-registry-driven pipeline orchestrator
+  emitter.ts                       $onEmit — direct pipeline orchestrator
+  expand-v1.ts                     V1 expansion (7 mutations), delete scaffold, auto-wiring
   types.ts                         Core interfaces: ResourceDef, RelationBody, ServiceMetadata
   primitives.ts                    Graph builders: ref, subref, or, and, addRelation, hasRelation
+  resource-graph.ts                Mutation-friendly wrapper over ResourceDef[]
   utils.ts                         Shared helpers: bodyToZed, slotName, flattenAnnotations, etc.
-  decorators.ts                    Decorator implementations: $cascadePolicy, $annotation
+  decorators.ts                    Decorator implementations: $v1Permission, $cascadeDelete, $resourceAnnotation
   discover-resources.ts            Resource graph extraction from the TypeSpec AST
   discover-templates.ts            Platform template discovery (AST walking, alias resolution)
   discover-decorated.ts            Decorator-state-based discovery (cascade, annotations)
-  provider-registry.ts             KesselProvider interface + registerProvider / getProviders
   expand-cascade.ts                Platform cascade-delete expansion
   generate.ts                      Output generators: SpiceDB, metadata, JSON Schema
   safety.ts                        Pre/post-expansion permission expression validation
-  providers/rbac/
-    rbac-provider.ts               RBAC domain logic: expansion (7 mutations), scaffold
 
 test/                            Tests (Vitest)
-  unit/                            Pure unit tests per module (13 files)
+  unit/                            Pure unit tests per module
   integration/                     Full pipeline integration tests
   helpers/
     pipeline.ts                    compilePipeline() — end-to-end test runner
@@ -204,13 +206,12 @@ test/                            Tests (Vitest)
 
 See **[docs/Guide.md](docs/Guide.md)** — single end-to-end reference covering:
 
-- Pipeline flow (compile → discover → expand → validate → emit)
+- Pipeline flow (compile → discover → auto-wire → expand → validate → emit)
 - Service developer guide (add services, resources, permissions)
-- Provider developer guide (build new expansion providers)
 - Architecture, testing, and design decisions
 
 ## Risks and Tradeoffs
 
 - **Node.js in CI** for `tsp` + TypeScript build
-- **New extension providers** implement `KesselProvider` interface, use shared `discoverTemplateInstances()`, and self-register — no emitter edits beyond a side-effect import
+- **New expansion logic** is added directly to `src/expand-*.ts` and called from `src/emitter.ts` — no separate plugin model
 - **Two JSON Schema paths** — built-in `@jsonSchema` emit vs unified schema (both run via `tspconfig.yaml`)

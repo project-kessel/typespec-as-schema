@@ -7,8 +7,8 @@ definition rbac/principal {
 
 definition inventory/host {
     permission workspace = t_workspace
-    permission view = t_workspace->inventory_host_view
     permission update = t_workspace->inventory_host_update
+    permission view = t_workspace->inventory_host_view
     permission delete = t_workspace->delete
 
     relation t_workspace: rbac/workspace

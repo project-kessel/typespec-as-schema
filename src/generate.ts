@@ -1,6 +1,9 @@
 import type { ResourceDef, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry, ServiceMetadata } from "./types.js";
 import { bodyToZed, slotName, isAssignable } from "./utils.js";
-import type { MetadataContribution } from "./provider-registry.js";
+
+export interface MetadataContribution {
+  permissionsByApp: Record<string, string[]>;
+}
 
 export function generateSpiceDB(resources: ResourceDef[]): string {
   const lines: string[] = [];
