@@ -1,17 +1,60 @@
 // Barrel module — re-exports all public API.
+// Also defines the TypeSpec emitter library ($lib) and state keys.
 
-export { IR_VERSION } from "./types.js";
+import { createTypeSpecLibrary, paramMessage, type JSONSchemaType } from "@typespec/compiler";
+
+// ─── Emitter library definition ──────────────────────────────────────
+
+export interface KesselEmitterOptions {
+  "output-format"?: "spicedb" | "metadata" | "unified-jsonschema";
+  strict?: boolean;
+}
+
+// AJV's JSONSchemaType is overly strict with optional union properties;
+// cast is the standard workaround in TypeSpec emitter libraries.
+const optionsSchema = {
+  type: "object",
+  properties: {
+    "output-format": {
+      type: "string",
+      enum: ["spicedb", "metadata", "unified-jsonschema"],
+      nullable: true,
+    },
+    strict: { type: "boolean", nullable: true },
+  },
+  required: [],
+  additionalProperties: false,
+} as JSONSchemaType<KesselEmitterOptions>;
+
+export const $lib = createTypeSpecLibrary({
+  name: "typespec-as-schema",
+  diagnostics: {
+    "invalid-permission-expr": {
+      severity: "error",
+      messages: {
+        default: paramMessage`Invalid permission expression: "${"expr"}"`,
+      },
+    },
+  },
+  emitter: { options: optionsSchema },
+} as const);
+
+export const StateKeys = {
+  kesselExtension: $lib.createStateSymbol("kesselExtension"),
+  cascadePolicy: $lib.createStateSymbol("cascadePolicy"),
+  annotation: $lib.createStateSymbol("annotation"),
+};
+
+// ─── Public API re-exports ───────────────────────────────────────────
+
 export type {
   RelationDef,
   RelationBody,
   ResourceDef,
   UnifiedJsonSchema,
-  ServiceMetadata,
-  IntermediateRepresentation,
-  ExtensionParams,
   CascadeDeleteEntry,
   AnnotationEntry,
-  ProviderDiscoveryResult,
+  ServiceMetadata,
 } from "./types.js";
 
 export {
@@ -23,23 +66,11 @@ export {
   findResource,
   cloneResources,
   isAssignable,
+  getStringValue,
+  extractParams,
 } from "./utils.js";
 
-export { parsePermissionExpr } from "./parser.js";
-
 export { ref, subref, or, and, addRelation, hasRelation } from "./primitives.js";
-
-export {
-  findExtensionTemplate,
-  isInstanceOf,
-  discoverExtensionInstances,
-} from "./discover-extensions.js";
-
-export {
-  discoverAnnotations,
-  discoverCascadeDeletePolicies,
-} from "./discover-platform.js";
-export type { DiscoveryWarnings, DiscoveryStats } from "./discover-platform.js";
 
 export { discoverResources } from "./discover-resources.js";
 
@@ -49,13 +80,4 @@ export {
   generateSpiceDB,
   generateUnifiedJsonSchemas,
   generateMetadata,
-  generateIR,
 } from "./generate.js";
-
-export { PLATFORM_TEMPLATES, buildRegistry, type ExtensionTemplateDef, type RegistryResult } from "./registry.js";
-
-export type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "./provider.js";
-
-export { compilePipeline, type PipelineResult, type PipelineOptions } from "./pipeline.js";
-
-export { compile, NodeHost } from "@typespec/compiler";

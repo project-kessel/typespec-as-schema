@@ -11,12 +11,8 @@ import {
   type Model,
   type Type,
 } from "@typespec/compiler";
-import type { RelationDef, ResourceDef } from "./types.js";
-import type { ExtensionTemplateDef } from "./registry.js";
-import { getNamespaceFQN, camelToSnake } from "./utils.js";
-import { parsePermissionExpr } from "./parser.js";
-import { findExtensionTemplate, isInstanceOf } from "./discover-extensions.js";
-import { PLATFORM_TEMPLATES } from "./registry.js";
+import type { RelationBody, RelationDef, ResourceDef } from "./types.js";
+import { getNamespaceFQN, camelToSnake, slotName } from "./utils.js";
 
 // ─── Type helpers ────────────────────────────────────────────────────
 
@@ -51,6 +47,60 @@ function resolveTargetName(t: Type | undefined): string {
     return ns ? `${ns}/${camelToSnake(t.name)}` : camelToSnake(t.name);
   }
   return "unknown";
+}
+
+// ─── Permission expression type walker ───────────────────────────────
+
+function extractStringLiteral(model: Model, propName: string): string | undefined {
+  const prop = model.properties.get(propName);
+  if (!prop) return undefined;
+  const t = prop.type;
+  if (t.kind === "Scalar" && t.name) return t.name;
+  if ("value" in t) return String((t as unknown as Record<string, unknown>).value);
+  return undefined;
+}
+
+function modelToRelationBody(model: Model): RelationBody | null {
+  if (isKesselType(model, "Ref")) {
+    const name = extractStringLiteral(model, "__name");
+    if (!name) return null;
+    return { kind: "ref", name };
+  }
+
+  if (isKesselType(model, "SubRef")) {
+    const relation = extractStringLiteral(model, "__relation");
+    const sub = extractStringLiteral(model, "__sub");
+    if (!relation || !sub) return null;
+    return { kind: "subref", name: slotName(relation), subname: sub };
+  }
+
+  if (isKesselType(model, "Or")) {
+    const leftProp = model.properties.get("__left");
+    const rightProp = model.properties.get("__right");
+    if (!leftProp || !rightProp) return null;
+    if (leftProp.type.kind !== "Model" || rightProp.type.kind !== "Model") return null;
+    const left = modelToRelationBody(leftProp.type as Model);
+    const right = modelToRelationBody(rightProp.type as Model);
+    if (!left || !right) return null;
+    const leftMembers = left.kind === "or" ? left.members : [left];
+    const rightMembers = right.kind === "or" ? right.members : [right];
+    return { kind: "or", members: [...leftMembers, ...rightMembers] };
+  }
+
+  if (isKesselType(model, "And")) {
+    const leftProp = model.properties.get("__left");
+    const rightProp = model.properties.get("__right");
+    if (!leftProp || !rightProp) return null;
+    if (leftProp.type.kind !== "Model" || rightProp.type.kind !== "Model") return null;
+    const left = modelToRelationBody(leftProp.type as Model);
+    const right = modelToRelationBody(rightProp.type as Model);
+    if (!left || !right) return null;
+    const leftMembers = left.kind === "and" ? left.members : [left];
+    const rightMembers = right.kind === "and" ? right.members : [right];
+    return { kind: "and", members: [...leftMembers, ...rightMembers] };
+  }
+
+  return null;
 }
 
 // ─── Resource model conversion ───────────────────────────────────────
@@ -89,18 +139,11 @@ function modelToResource(
     } else if (isKesselType(propType, "Permission")) {
       hasRelations = true;
       const exprProp = propType.properties.get("__expr");
-      let expr = "";
-      if (exprProp) {
-        const exprType = exprProp.type;
-        if (exprType.kind === "Scalar" && exprType.name) {
-          expr = exprType.name;
-        } else if ("value" in exprType) {
-          expr = String((exprType as unknown as Record<string, unknown>).value);
+      if (exprProp && exprProp.type.kind === "Model") {
+        const body = modelToRelationBody(exprProp.type as Model);
+        if (body) {
+          relations.push({ name, body });
         }
-      }
-      const parsed = parsePermissionExpr(expr);
-      if (parsed) {
-        relations.push({ name, body: parsed });
       }
     }
   }
@@ -117,20 +160,15 @@ function modelToResource(
 
 /**
  * Discovers resource models from the compiled program.
- * Accepts the full list of extension templates (platform + providers) so
- * extension template instances are excluded from resource discovery.
+ * Extension template instances (V1WorkspacePermission, CascadeDeletePolicy, etc.)
+ * are naturally excluded because modelToResource only picks up models with
+ * Assignable, BoolRelation, or Permission properties.
  */
 export function discoverResources(
   program: Program,
-  allTemplates?: ExtensionTemplateDef[],
 ): { resources: ResourceDef[] } {
-  const templates = allTemplates ?? [...PLATFORM_TEMPLATES];
   const resources: ResourceDef[] = [];
   const seenResources = new Set<string>();
-
-  const extensionTemplates = templates
-    .map((def) => findExtensionTemplate(program, def.templateName, def.namespace))
-    .filter((m): m is Model => m !== null);
 
   navigateProgram(program, {
     model(model: Model) {
@@ -139,11 +177,6 @@ export function discoverResources(
       const modelNsFQN = getNamespaceFQN(model.namespace);
       if (modelNsFQN.endsWith("Kessel")) return;
 
-      if (extensionTemplates.some((t) => isInstanceOf(model, t))) {
-        return;
-      }
-
-      if (model.name.endsWith("Data")) return;
       if (!model.name || model.name === "") return;
 
       const nsPrefix = modelNsFQN;

@@ -34,13 +34,13 @@ If this permission should be checkable on a resource:
 ```typespec
 model Widget {
   workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
-  view: Permission<"workspace.myapp_widget_view">;
+  view: Permission<SubRef<"workspace", "myapp_widget_view">>;
 }
 ```
 
-The `Permission<"expr">` string follows the pattern: `<relation>.<permission_name>` where:
-- `<relation>` is the local relation name (e.g., `workspace`)
-- `<permission_name>` is the v2 permission name from the alias
+The `Permission<SubRef<"relation", "permission">>` type uses:
+- `"relation"` — the local relation name (e.g., `workspace`)
+- `"permission"` — the v2 permission name from the alias
 
 ### 3. Preview the expansion
 

@@ -1,25 +1,24 @@
-// RBAC Extension Provider
+// RBAC Extension Logic
 //
-// Owns the V1WorkspacePermission expansion logic: the 7 mutations per
+// Owns the V1WorkspacePermission expansion: the 7 mutations per
 // permission, view_metadata accumulation, and cascade-delete scaffold wiring.
 //
 // This is the TypeSpec equivalent of:
 //   - TS-POC:     schema/rbac.ts → create_v1_based_workspace_permission()
 //   - Starlark:   schema/rbac.star → v1_based_permission()
 //   - CUE:        rbac/rbac.cue → #AddV1BasedPermission
-//
-// The platform pipeline invokes this provider's discover() and expand()
-// through the ExtensionProvider interface. RBAC owns what happens when a
-// V1WorkspacePermission alias is instantiated; the platform only orchestrates.
 
-import type { Program } from "@typespec/compiler";
-import type { ResourceDef } from "../../src/types.js";
-import type { ExtensionTemplateDef } from "../../src/registry.js";
-import type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "../../src/provider.js";
-import type { DiscoveryWarnings } from "../../src/discover-platform.js";
-import { discoverExtensionInstances } from "../../src/discover-extensions.js";
-import { ref, subref, or, and, addRelation, hasRelation } from "../../src/primitives.js";
-import { findResource, cloneResources } from "../../src/utils.js";
+import {
+  navigateProgram,
+  isTemplateInstance,
+  type Program,
+  type Model,
+  type Namespace,
+  type Type,
+} from "@typespec/compiler";
+import type { ResourceDef } from "../../types.js";
+import { ref, subref, or, and, addRelation, hasRelation } from "../../primitives.js";
+import { findResource, cloneResources, getNamespaceFQN, getStringValue, extractParams } from "../../utils.js";
 
 // ─── RBAC domain types ──────────────────────────────────────────────
 
@@ -32,10 +31,27 @@ export interface V1Extension {
   v2Perm: string;
 }
 
+export interface ExpansionResult {
+  resources: ResourceDef[];
+  warnings: string[];
+}
+
 interface RBACScaffold {
   role: ResourceDef;
   roleBinding: ResourceDef;
   workspace: ResourceDef;
+}
+
+export interface DiscoveryStats {
+  aliasesAttempted: number;
+  aliasesResolved: number;
+  resourcesFound: number;
+  extensionsFound: number;
+}
+
+export interface DiscoveryWarnings {
+  skipped: string[];
+  stats: DiscoveryStats;
 }
 
 // ─── RBAC constants ─────────────────────────────────────────────────
@@ -54,13 +70,129 @@ function isKesselVerb(v: string): v is KesselVerb {
   return VALID_VERBS.has(v as KesselVerb);
 }
 
-// ─── RBAC template definitions ──────────────────────────────────────
+// ─── V1WorkspacePermission template definition ──────────────────────
 
-const V1_WORKSPACE_PERMISSION_TEMPLATE: ExtensionTemplateDef = {
+export interface TemplateDef {
+  templateName: string;
+  paramNames: string[];
+  namespace: string;
+}
+
+const V1_TEMPLATE: TemplateDef = {
   templateName: "V1WorkspacePermission",
   paramNames: ["application", "resource", "verb", "v2Perm"],
   namespace: "Kessel",
 };
+
+// ─── AST Walking Utilities ──────────────────────────────────────────
+
+function findTemplate(program: Program, templateName: string, namespace?: string): Model | null {
+  const globalNs = program.getGlobalNamespaceType();
+  function search(ns: Namespace): Model | null {
+    for (const [, model] of ns.models) {
+      if (model.name === templateName &&
+          (!namespace || getNamespaceFQN(ns).endsWith(namespace))) {
+        return model;
+      }
+    }
+    for (const [, childNs] of ns.namespaces) {
+      const found = search(childNs);
+      if (found) return found;
+    }
+    return null;
+  }
+  return search(globalNs);
+}
+
+function isInstanceOfTemplate(model: Model, template: Model): boolean {
+  if (!isTemplateInstance(model)) return false;
+  if (model.sourceModel === template) return true;
+  if (model.templateNode === template.node) return true;
+  if (
+    model.name === template.name &&
+    getNamespaceFQN(model.namespace) === getNamespaceFQN(template.namespace)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isExpectedResolutionError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const record = e as unknown as Record<string, unknown>;
+  if (typeof record.code === "string") {
+    const knownCodes = ["unresolved-type", "unknown-identifier", "invalid-ref"];
+    if (knownCodes.includes(record.code)) return true;
+  }
+  if (typeof record.diagnosticCode === "string") return true;
+  return /cannot|not found|resolve/i.test(e.message);
+}
+
+export function discoverTemplateInstances(
+  program: Program,
+  def: TemplateDef,
+): { results: Record<string, string>[]; skipped: string[]; aliasesAttempted: number; aliasesResolved: number } {
+  const { templateName, paramNames, namespace } = def;
+  const template = findTemplate(program, templateName, namespace);
+  if (!template) {
+    return {
+      results: [],
+      skipped: [`Template "${templateName}" (namespace: ${namespace ?? "any"}) not found in compiled program`],
+      aliasesAttempted: 0,
+      aliasesResolved: 0,
+    };
+  }
+
+  const results: Record<string, string>[] = [];
+  const seen = new Set<string>();
+  const skipped: string[] = [];
+
+  function addUnique(model: Model): void {
+    if (!isInstanceOfTemplate(model, template!)) return;
+    const params = extractParams(model, paramNames);
+    if (Object.keys(params).length === 0) {
+      const modelId = model.name || "(anonymous)";
+      skipped.push(`Matched template "${templateName}" but extracted no params from model "${modelId}"`);
+      return;
+    }
+    const key = JSON.stringify(params);
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push(params);
+  }
+
+  navigateProgram(program, {
+    model(model: Model) {
+      if (model.templateNode && !isTemplateInstance(model)) return;
+      if (getNamespaceFQN(model.namespace).endsWith("Kessel")) return;
+      addUnique(model);
+    },
+  });
+
+  let aliasesAttempted = 0;
+  let aliasesResolved = 0;
+
+  for (const [, sourceFile] of program.sourceFiles) {
+    for (const statement of sourceFile.statements) {
+      if (!("value" in statement && "id" in statement)) continue;
+      aliasesAttempted++;
+      try {
+        const aliasType = program.checker.getTypeForNode(statement);
+        if (!aliasType || aliasType.kind !== "Model") continue;
+        aliasesResolved++;
+        addUnique(aliasType as Model);
+      } catch (e: unknown) {
+        if (isExpectedResolutionError(e)) {
+          skipped.push(`Skipped statement in ${templateName} discovery: ${e instanceof Error ? e.message : String(e)}`);
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
+
+  return { results, skipped, aliasesAttempted, aliasesResolved };
+}
 
 // ─── RBAC scaffold resolution ───────────────────────────────────────
 
@@ -94,7 +226,7 @@ function addBoolRelation(resource: ResourceDef, name: string, seen: Set<string>)
 
 // ─── V1 Permission Expansion ────────────────────────────────────────
 
-export function expandV1Permissions(baseResources: ResourceDef[], permissions: V1Extension[]): ProviderExpansionResult {
+export function expandV1Permissions(baseResources: ResourceDef[], permissions: V1Extension[]): ExpansionResult {
   const resources = cloneResources(baseResources);
 
   if (!resources.some((r) => r.name === "principal" && r.namespace === "rbac")) {
@@ -184,12 +316,12 @@ export function wireDeleteScaffold(resources: ResourceDef[]): ResourceDef[] {
   return result;
 }
 
-// ─── Provider Implementation ────────────────────────────────────────
+// ─── V1 Permission Discovery ────────────────────────────────────────
 
 export function discoverV1Permissions(program: Program, warnings?: DiscoveryWarnings): V1Extension[] {
-  const { results, skipped, aliasesAttempted, aliasesResolved } = discoverExtensionInstances(
+  const { results, skipped, aliasesAttempted, aliasesResolved } = discoverTemplateInstances(
     program,
-    V1_WORKSPACE_PERMISSION_TEMPLATE,
+    V1_TEMPLATE,
   );
   if (warnings) {
     warnings.skipped.push(...skipped);
@@ -207,42 +339,3 @@ export function discoverV1Permissions(program: Program, warnings?: DiscoveryWarn
   if (warnings) warnings.stats.extensionsFound += extensions.length;
   return extensions;
 }
-
-export const rbacProvider: ExtensionProvider = {
-  id: "rbac",
-  ownedNamespaces: ["rbac"],
-  costPerInstance: 7,
-  applicationParamKey: "application",
-  permissionParamKey: "v2Perm",
-
-  templates: [V1_WORKSPACE_PERMISSION_TEMPLATE],
-
-  discover(program: Program): DiscoveredExtension[] {
-    const v1Perms = discoverV1Permissions(program);
-    return v1Perms.map((p) => ({
-      kind: "V1WorkspacePermission",
-      params: {
-        application: p.application,
-        resource: p.resource,
-        verb: p.verb,
-        v2Perm: p.v2Perm,
-      },
-    }));
-  },
-
-  expand(resources: ResourceDef[], discovered: DiscoveredExtension[]): ProviderExpansionResult {
-    const permissions: V1Extension[] = discovered
-      .filter((d) => d.kind === "V1WorkspacePermission")
-      .map((d) => ({
-        application: d.params.application,
-        resource: d.params.resource,
-        verb: d.params.verb as KesselVerb,
-        v2Perm: d.params.v2Perm,
-      }));
-    return expandV1Permissions(resources, permissions);
-  },
-
-  onBeforeCascadeDelete(resources: ResourceDef[]): ResourceDef[] {
-    return wireDeleteScaffold(resources);
-  },
-};

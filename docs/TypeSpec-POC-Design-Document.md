@@ -1,435 +1,198 @@
 # TypeSpec-as-Schema: Design Document
 
-**Scope:** `v2/typespec-as-schema` — current implementation.
+**Status:** Implemented  
+**Scope:** `typespec-as-schema/` — Kessel Schema POC using TypeSpec as the declarative schema language.
 
 ---
 
-## What This Does
+## Overview
 
-Service teams write `.tsp` files to declare their resources and permissions. A TypeScript emitter compiles them into four outputs: SpiceDB schema, per-service metadata, unified JSON Schema, and a bundled IR for Go consumers.
+This POC explores TypeSpec as the single source of truth for Kessel authorization schemas. Service teams write `.tsp` declarations; a registered TypeSpec emitter plugin produces SpiceDB schemas, per-service metadata, and unified JSON Schema — the same three outputs as the sibling Starlark and CUE POCs.
 
----
+### Design Goals
 
-## What Service Teams Write
-
-### Register a permission (one alias):
-
-```typespec
-alias viewPermission = Kessel.V1WorkspacePermission<
-  "inventory", "hosts", "read", "inventory_host_view"
->;
-```
-
-This single line triggers 7 mutations across Role, RoleBinding, and Workspace. No TypeScript changes needed.
-
-### Define a resource model:
-
-```typespec
-model Host {
-  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
-  view: Permission<"workspace.inventory_host_view">;
-  update: Permission<"workspace.inventory_host_update">;
-}
-```
-
-### Define data fields (for JSON Schema):
-
-```typespec
-@jsonSchema
-model HostData {
-  @format("uuid") subscription_manager_id?: string;
-  satellite_id?: string | SatelliteNumericId;
-  @maxLength(255) ansible_host?: string;
-}
-```
+1. **Zero computation in service schema** — Service authors write only type declarations and alias instantiations. All expansion logic lives in reviewed platform code.
+2. **Bounded, deterministic expansion** — Each RBAC permission produces exactly 7 mutations. Cascade-delete policies produce exactly 1. The graph is finite and predictable.
+3. **Compiler-guaranteed discovery** — Custom decorators (`@cascadePolicy`, `@annotation`) populate compiler state sets. Discovery reads those sets rather than performing fragile name matching.
+4. **Single compilation pass** — `tsp compile` runs the emitter, producing one output format per invocation. No separate CLI, no Node.js scripts beyond the compiler.
 
 ---
 
-## End-to-End Flow
+## Architecture
+
+### Emitter Plugin Model
+
+The package exports a registered TypeSpec emitter plugin:
 
 ```
-    schema/main.tsp ──imports──▶ ../providers/rbac/rbac.tsp, hbi.tsp, remediations.tsp
-              │                  lib/kessel.tsp, lib/kessel-extensions.tsp
-              │
-              ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │  STEP 1: COMPILE                                        │
-    │  TypeSpec compiler parses all .tsp files into            │
-    │  a typed Program (AST + resolved type graph).            │
-    └───────────────────────┬─────────────────────────────────┘
-                            │
-              ┌─────────────┴─────────────┐
-              ▼                           ▼
-    ┌───────────────────┐       ┌───────────────────┐
-    │  STEP 2a: DISCOVER│       │  STEP 2b: DISCOVER│
-    │  RESOURCES        │       │  PLATFORM + IR    │
-    │  (discover.ts)    │       │  (discover.ts)    │
-    │                   │       │                   │
-    │  Walk all models. │       │  Walk all models. │
-    │  Find Assignable, │       │  discoverExtension │
-    │  Permission,      │       │  Instances for     │
-    │  BoolRelation     │       │  providers; find   │
-    │  properties       │       │  platform          │
-    │  → ResourceDef[]  │       │  CascadeDelete +   │
-    └────────┬──────────┘       │  annotations.      │
-             │                  │  → AnnotationMap   │
-             │                  │  → CascadeEntry[]  │
-             │                  └────────┬──────────┘
-             └──────────┬────────────────┘
-                        ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │  STEP 3: PROVIDER EXPANSION LOOP  (pipeline.ts)         │
-    │                                                         │
-    │  Provider expansion loop — for each registered           │
-    │  ExtensionProvider:                                      │
-    │    • discover (template instances from AST)            │
-    │    • expand (bounded mutations on scaffold)            │
-    │                                                         │
-    │  RBAC V1 workspace permissions live in:                 │
-    │    providers/rbac/rbac-provider.ts                      │
-    │    (same 7 mutations per extension as before: Role/     │
-    │     RoleBinding/Workspace; view_metadata OR for reads)  │
-    │                                                         │
-    │  src/expand.ts: only generic cascade-delete wiring:     │
-    │    expandCascadeDeletePolicies — RBAC chain + child     │
-    │      Role:        delete = any_any_any                  │
-    │      RoleBinding: delete = subject & t_granted->delete  │
-    │      Workspace:   delete = t_binding->delete            │
-    │                          + t_parent->delete             │
-    │      Child:       delete = t_{parent}->delete           │
-    │                                                         │
-    │  Bool dedup: inventory_any_any added once even if       │
-    │  both inv_host_view and inv_host_update request it.     │
-    └───────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │  STEP 3b: VALIDATE  (safety.ts)                         │
-    │  • Per-provider complexity budgets                      │
-    │  • Per-provider / global expansion timeouts             │
-    │  • Permission expression validation                     │
-    │  • Output size limits                                   │
-    └───────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │  STEP 4: GENERATE + EMIT  (generate.ts → emitter)       │
-    │                                                         │
-    │  The enriched ResourceDef[] feeds four generators:      │
-    │                                                         │
-    │  ┌──────────────────┐  ┌──────────────────┐            │
-    │  │ generateSpiceDB  │  │ generateMetadata │            │
-    │  │ → .zed text      │  │ → per-service    │            │
-    │  │   (default)      │  │   perms+resources│            │
-    │  └──────────────────┘  └──────────────────┘            │
-    │  ┌──────────────────┐  ┌──────────────────┐            │
-    │  │ generateUnified  │  │ generateIR       │            │
-    │  │ JsonSchemas      │  │ → all-in-one     │            │
-    │  │ → _id fields for │  │   JSON bundle    │            │
-    │  │   ExactlyOne rels│  │                  │            │
-    │  └──────────────────┘  └──────────────────┘            │
-    └─────────────────────────────────────────────────────────┘
+package.json
+  "tspMain": "lib/kessel.tsp"       ← TypeSpec types
+  "exports": { ".": "./dist/index.js" }  ← JS entry ($lib, $onEmit, decorators)
 ```
+
+The TypeSpec compiler loads the package, resolves `extern dec` implementations, and calls `$onEmit` after compilation completes.
+
+### Module Responsibilities
+
+| Module | Role |
+|--------|------|
+| `src/index.ts` | Package entry — exports `$lib`, `$onEmit`, `$kesselExtension`, `$cascadePolicy`, `$annotation` |
+| `src/lib.ts` | Emitter library definition (`createTypeSpecLibrary`), `StateKeys`, barrel re-exports |
+| `src/emitter.ts` | `$onEmit` — pipeline orchestrator |
+| `src/types.ts` | Core interfaces: `ResourceDef`, `RelationBody`, `ServiceMetadata`, etc. |
+| `src/primitives.ts` | Graph builders: `ref`, `subref`, `or`, `and`, `addRelation`, `hasRelation` |
+| `src/utils.ts` | Helpers: `bodyToZed`, `slotName`, `flattenAnnotations`, `extractParams` |
+| `src/decorators.ts` | Decorator implementations: `$cascadePolicy`, `$annotation`, `$kesselExtension` |
+| `src/discover-resources.ts` | Walks the TypeSpec type graph → `ResourceDef[]` |
+| `src/discover-decorated.ts` | Reads decorator state sets → `CascadeDeleteEntry[]`, `AnnotationEntry[]` |
+| `src/expand-cascade.ts` | Adds `delete` permissions from `CascadeDeletePolicy` declarations |
+| `src/generate.ts` | `generateSpiceDB`, `generateMetadata`, `generateUnifiedJsonSchemas` |
+| `src/safety.ts` | Pre/post-expansion permission expression validation |
+| `src/providers/rbac/rbac-provider.ts` | `discoverV1Permissions`, `expandV1Permissions`, `wireDeleteScaffold` |
 
 ---
 
-## Concrete Example: `inventory_host_view`
+## Pipeline Stages
 
-Starting point — `schema/hbi.tsp`:
+The `$onEmit` function in `src/emitter.ts` orchestrates six stages:
 
-```typespec
-alias viewPermission = Kessel.V1WorkspacePermission<"inventory", "hosts", "read", "inventory_host_view">;
-```
+### 1. Discovery
 
-**Discover:** extracts `{app: "inventory", res: "hosts", verb: "read", v2: "inventory_host_view"}`.
+Four independent discovery passes extract structured data from the compiled `Program`:
 
-**Expand:** makes 7 mutations:
+| Function | Input | Output |
+|----------|-------|--------|
+| `discoverResources(program)` | Type graph walk | `ResourceDef[]` |
+| `discoverV1Permissions(program)` | Template/alias walking | `V1Extension[]` |
+| `discoverDecoratedCascadePolicies(program)` | `StateKeys.cascadePolicy` state set | `CascadeDeleteEntry[]` |
+| `discoverDecoratedAnnotations(program)` | `StateKeys.annotation` state set | `Map<string, AnnotationEntry[]>` |
 
-| # | Target | Result |
-|---|--------|--------|
-| 1 | Role | `inventory_any_any: rbac/principal:*` |
-| 2 | Role | `inventory_hosts_any: rbac/principal:*` |
-| 3 | Role | `inventory_any_read: rbac/principal:*` |
-| 4 | Role | `inventory_hosts_read: rbac/principal:*` |
-| 5 | Role | `inventory_host_view = any_any_any + inventory_any_any + inventory_hosts_any + inventory_any_read + inventory_hosts_read` |
-| 6 | RoleBinding | `inventory_host_view = (subject & t_granted->inventory_host_view)` |
-| 7 | Workspace | `inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view` |
+**Note:** RBAC V1 permissions use template/alias walking (finds `V1WorkspacePermission` instances). The `@kesselExtension` decorator exists but is not required for RBAC discovery.
 
-Because `verb === "read"`, `inventory_host_view` is collected for `view_metadata`.
+### 2. Pre-Expansion Validation
 
----
+`validatePreExpansionExpressions(resources)` checks that every `ref` and `subref` in permission expressions resolves to a known local relation — catching typos before expansion mutates the graph. Failures produce warnings.
 
-## Outputs
+### 3. RBAC Expansion
 
-### SpiceDB/Zed (default)
+`expandV1Permissions(resources, permissions)` — For each `V1Extension`, adds exactly 7 relations:
+- 4 bool relations on Role (hierarchy levels)
+- 1 OR permission on Role
+- 1 AND permission on RoleBinding
+- 1 OR permission on Workspace
 
-```
-definition rbac/principal {}
+Plus: read-verb permissions accumulate into `view_metadata` on Workspace.
 
-definition rbac/role {
-    permission any_any_any = t_any_any_any
-    permission inventory_host_view = any_any_any + inventory_any_any + ...
-    permission delete = any_any_any
-    relation t_any_any_any: rbac/principal:*
-    ...
-}
+`wireDeleteScaffold(resources)` — Adds `delete` permissions to Role, RoleBinding, and Workspace.
 
-definition rbac/role_binding {
-    permission inventory_host_view = (subject & t_granted->inventory_host_view)
-    permission delete = (subject & t_granted->delete)
-    ...
-}
+### 4. Cascade-Delete Expansion
 
-definition rbac/workspace {
-    permission view_metadata = inventory_host_view + remediations_remediation_view
-    permission inventory_host_view = t_binding->inventory_host_view + t_parent->inventory_host_view
-    permission delete = t_binding->delete + t_parent->delete
-    ...
-}
+`expandCascadeDeletePolicies(resources, cascadePolicies)` — For each `CascadeDeleteEntry`, adds a `delete` permission on the child resource as `subref(parentRelation, "delete")`.
 
-definition inventory/host {
-    permission view = t_workspace->inventory_host_view
-    permission update = t_workspace->inventory_host_update
-    permission delete = t_workspace->delete
-    relation t_workspace: rbac/workspace
-}
-```
+### 5. Post-Expansion Validation
 
-### Metadata JSON (`--metadata`)
+`validatePermissionExpressions(fullSchema)` — Cross-type `subref` validation on the fully expanded graph. In strict mode, failures become compiler errors.
 
-```json
-{
-  "inventory": { "permissions": ["inventory_host_view", "inventory_host_update"], "resources": ["host"] },
-  "remediations": { "permissions": ["remediations_remediation_view", "remediations_remediation_update"], "resources": [] }
-}
-```
+### 6. Output Generation
 
-### IR JSON (`--ir`)
+One format per invocation:
 
-Bundles everything into one file for Go consumers:
+| Format | Generator | Input | Output file |
+|--------|-----------|-------|-------------|
+| `spicedb` | `generateSpiceDB(fullSchema)` | Expanded graph | `schema.zed` |
+| `metadata` | `generateMetadata(resources, permissions, ...)` | Pre-expansion resources | `metadata.json` |
+| `unified-jsonschema` | `generateUnifiedJsonSchemas(fullSchema, ownedNamespaces)` | Expanded graph | `unified-jsonschemas.json` |
 
-```json
-{
-  "version": "1.2.0",
-  "resources": [ /* expanded ResourceDef[] */ ],
-  "extensions": { /* Record<string, unknown[]> — per-provider sections */ },
-  "spicedb": "definition rbac/principal { ... }",
-  "metadata": { /* per-service */ },
-  "jsonSchemas": { /* unified JSON Schema fragments */ },
-  "annotations": { /* optional key-value metadata per resource */ }
-}
-```
+**Key distinction:** Metadata uses the pre-expansion `resources` (to reflect what services declared) plus discovered permissions, annotations, and cascade policies. SpiceDB and JSON Schema use the fully expanded graph.
 
 ---
 
-## Adding a New Service
+## Extension Model
 
-**1. Create `schema/notifications.tsp`:**
+### How V1WorkspacePermission Works
 
-```typespec
-import "../lib/kessel.tsp";
-import "../providers/rbac/rbac-extensions.tsp";
-import "../providers/rbac/rbac.tsp";
+The RBAC extension uses a **template-as-data-carrier** pattern:
 
-using Kessel;
-namespace Notifications;
+1. **Template definition** (`schema/rbac/rbac-extensions.tsp`) — A parameterized TypeSpec model with no computation
+2. **Service usage** (`schema/hbi.tsp`) — Alias declarations that instantiate the template
+3. **Discovery** (`rbac-provider.ts`) — Walks the AST for template instances and resolves alias statements
+4. **Expansion** (`rbac-provider.ts`) — 7 bounded mutations per instance
 
-alias viewPermission = Kessel.V1WorkspacePermission<
-  "notifications", "notifications", "read", "notifications_notification_view"
->;
+### How Decorators Work
 
-model Notification {
-  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
-  view: Permission<"workspace.notifications_notification_view">;
-}
-```
+Platform extensions (`CascadeDeletePolicy`, `ResourceAnnotation`) use custom decorators:
 
-**2. Add one import to `schema/main.tsp`:**
+1. **Declaration** (`lib/decorators.tsp`) — `extern dec cascadePolicy(target: Model)`
+2. **Implementation** (`src/decorators.ts`) — Adds target to `StateKeys.cascadePolicy` state set
+3. **Discovery** (`src/discover-decorated.ts`) — Reads state set, extracts parameters from model properties
+4. **Expansion** (`src/expand-cascade.ts`) — Adds delete permission on child resource
 
-```typespec
-import "./notifications.tsp";
-```
+### Adding a New Extension
 
-**3. Run:**
-
-```bash
-npx tsx src/spicedb-emitter.ts schema/main.tsp
-```
-
-No TypeScript changes needed.
+1. Define a template model in `lib/kessel-extensions.tsp`
+2. Add a decorator in `lib/decorators.tsp` + implement in `src/decorators.ts`
+3. Add discovery logic in `src/discover-decorated.ts`
+4. Add expansion logic (if any)
+5. Wire into `src/emitter.ts`
 
 ---
 
-## Source Files
+## Output Formats
 
-| File | Lines | What it does |
-|------|-------|-------------|
-| `src/types.ts` | 71 | Core interfaces: `ResourceDef`, `RelationBody`, `UnifiedJsonSchema`, `IntermediateRepresentation`, `AnnotationEntry`, and related IR shapes |
-| `src/utils.ts` | 66 | Shared helpers: `getNamespaceFQN`, `camelToSnake`, `bodyToZed`, `slotName`, `flattenAnnotations`, `findResource`, `cloneResources`, `isAssignable` |
-| `src/parser.ts` | 157 | Recursive-descent parser for SpiceDB permission expression strings |
-| `src/registry.ts` | — | `buildRegistry(providers)` + `PLATFORM_TEMPLATES`; wires template metadata for the pipeline |
-| `src/discover.ts` | — | Resource discovery + `discoverExtensionInstances` for providers; platform cascade/annotation discovery |
-| `src/expand.ts` | — | Generic cascade-delete expansion only (`expandCascadeDeletePolicies`); no provider-specific RBAC math |
-| `src/pipeline.ts` | — | Provider-driven orchestration: compile → discover → per-provider discover/expand loop → validate → generate |
-| `src/provider.ts` | — | `ExtensionProvider` interface and provider contract |
-| `src/primitives.ts` | — | Platform builtins: `ref`, `subref`, `or`, `and`, `addRelation`, etc. |
-| `src/generate.ts` | 160 | Output generators: SpiceDB, JSON Schema, metadata, IR |
-| `src/safety.ts` | — | Per-provider complexity budgets, timeouts, output size, expression validation |
-| `src/lib.ts` | 59 | Barrel module re-exporting all public API |
-| `src/spicedb-emitter.ts` | 156 | CLI entry point: parses flags, calls `compilePipeline`, emits the requested output format |
-| `providers/rbac/rbac-provider.ts` | — | RBAC `ExtensionProvider`: V1 workspace permission expansion (7 bounded mutations, scaffold wiring) |
-| `providers/rbac/rbac.tsp` | — | RBAC types (moved from `schema/rbac.tsp`) |
-| `providers/rbac/rbac-extensions.tsp` | — | `V1WorkspacePermission` template and RBAC extension surface for services |
-| `lib/kessel-extensions.tsp` | — | `CascadeDeletePolicy` + `ResourceAnnotation` only |
-| **Total** | **~1600+** | |
-
-### Commands
-
-```bash
-npx tsx src/spicedb-emitter.ts schema/main.tsp                         # SpiceDB output
-npx tsx src/spicedb-emitter.ts schema/main.tsp --metadata              # Service metadata
-npx tsx src/spicedb-emitter.ts schema/main.tsp --unified-jsonschema    # JSON Schema
-npx tsx src/spicedb-emitter.ts schema/main.tsp --ir                    # IR for Go consumer
-npx tsx src/spicedb-emitter.ts schema/main.tsp --preview <v2perm>      # Preview extension mutations
-npx vitest run                                                         # 203 tests
-```
+| Output | Audience | Content |
+|--------|----------|---------|
+| **SpiceDB** (`.zed`) | Authorization engine | Full schema with definitions, permissions, relations |
+| **Metadata** (`.json`) | Platform tooling | Per-service: permissions list, resource names, cascade policies, annotations |
+| **Unified JSON Schema** (`.json`) | API servers/clients | Per-resource payload contracts (fields from `ExactlyOne` assignable relations) |
 
 ---
 
-## Go Consumer Path
+## Comparison with Other POCs
 
-```
-.tsp files → TypeSpec compile → emitter --ir → resources.json → go:embed → Go structs
-```
+| Aspect | TypeSpec | Starlark | CUE |
+|--------|----------|----------|-----|
+| Schema language | TypeSpec (.tsp) | Starlark (.star) | CUE (.cue) |
+| Outputs | 3 (same) | 3 (same) | 3 (same) |
+| Expansion engine | TypeScript emitter plugin | Go interpreter | Go evaluator |
+| Type checking | Compiler-enforced | Runtime | Schema validation |
+| Extension mechanism | Decorators + templates | Function calls | Definitions |
+| IDE support | TypeSpec language server | Limited | CUE LSP |
+| CI dependency | Node.js | Go | Go |
 
-Go runtime loads the pre-built IR. No Node.js dependency at runtime.
+All three POCs produce identical output categories: SpiceDB schema, metadata JSON, and unified JSON Schema. The TypeSpec POC uses the TypeSpec compiler's plugin infrastructure; the others use Go interpreters that directly walk their DSL and produce outputs.
 
 ---
 
-## Extension Safety: Structural Guarantees
+## Design Decisions
 
-### The Problem
+### Why decorators for cascade/annotations but not RBAC
 
-Schema compilation runs inside Kessel Inventory. A malformed or adversarial schema
-that causes unbounded computation could escalate into service downtime. Runtime
-limits (timeouts, step counts) are a necessary minimum, but they only detect
-the problem — a schema that always times out is still broken until someone fixes it.
+RBAC V1 permissions are discovered via template/alias walking because:
+- Service teams already use `alias` declarations (zero-friction adoption)
+- The RBAC provider needs to resolve template parameters from both `model ... is Template<>` and `alias ... = Template<>` forms
+- Adding `@kesselExtension` on every alias would be redundant ceremony
 
-The ideal is **prevention**: an architecture where user-authored schema cannot
-cause unbounded computation in the first place.
+Cascade policies and annotations use decorators because:
+- They are platform-neutral (not provider-owned)
+- Decorator state sets provide compiler-guaranteed discovery
+- The `model ... is Template<> {}` form works naturally with decorators
 
-### TypeSpec's Structural Advantage
+### Why a single RBAC provider called directly
 
-TypeSpec separates **declarative schema** (what service teams write) from
-**provider-owned expansion** (reviewed TypeScript shipped with each extension
-family) and **platform orchestration** (budgets, timeouts, neutral pipeline).
-This creates a three-layer trust boundary:
+There is currently only one extension provider (RBAC). The emitter calls its functions directly rather than through an abstract provider interface. If additional providers are needed, a provider registry can be reintroduced.
 
-```
-  Service authors write:        Providers own:                Platform orchestrates:
-  schema/*.tsp                  providers/rbac/               src/pipeline.ts
-  (alias declarations,          rbac-provider.ts              (discover → expand loop,
-   model definitions)           (7 bounded mutations,          per-provider budgets,
-                                  scaffold wiring)              expansion timeout)
-  Zero computation.             Reviewed, bounded,            Provider-neutral
-  Only type declarations.       cost-declared.                orchestration.
-```
+### Why three separate output formats
 
-**Unchanged for services:** Authors still write zero computation—only `.tsp` aliases, models, and annotations.
+The TypeSpec, Starlark, and CUE POCs all produce the same three standalone outputs. A previously-implemented bundled IR format was removed because it added complexity unique to TypeSpec without value over running `tsp compile` with different `output-format` options.
 
-**What service authors can do:**
-- Declare `V1WorkspacePermission` aliases (zero computation — type declaration only)
-- Declare `ResourceAnnotation` aliases (zero computation — metadata only)
-- Declare `CascadeDeletePolicy` aliases (zero computation — adds delete permission)
-- Define resource models with `Assignable`, `Permission`, `BoolRelation` properties
-- Define data models with `@jsonSchema` decorators
+---
 
-**What service authors cannot do:**
-- Write loops, recursion, or arbitrary logic
-- Call functions that mutate schema state
-- Register new expansion providers or bypass review
-- Execute arbitrary user code during compilation
+## Risks and Mitigations
 
-**What providers (e.g. RBAC) ship:** Reviewed expansion code with declared cost
-budgets; bounded mutation sets (such as the 7-step V1 permission expansion);
-no arbitrary computation in service `.tsp` files.
-
-**What the platform guarantees:** It runs the provider loop under per-provider
-complexity budgets and timeouts; orchestration stays provider-neutral.
-
-**Why this matters:** For N RBAC-style extensions, work stays linear in N (e.g. 7N
-mutations plus `view_metadata` accumulation for that provider). Runtime guards still
-catch bugs or regressions in provider code without service teams running computation
-in schema sources.
-
-### Comparison with Other Candidates
-
-| Property | TypeSpec | TypeScript (goja) | Starlark | CUE |
-|---|---|---|---|---|
-| User code in schema? | **No** | Yes — arbitrary TS | Yes — arbitrary Starlark | Limited — declarative but recursive |
-| Extension logic | Provider-owned expansion (e.g. `rbac-provider.ts`), platform orchestrates | User-written functions | User-written functions + Go builtins | Unification (automatic) |
-| Computation bound | Per-provider declared budgets; linear for bounded providers | Unbounded — user code | Unbounded — user code | Unbounded — recursive unification |
-| Time limits | Per-provider + process timeouts | `runtime.Interrupt()` | `SetMaxExecutionSteps()` | None built-in |
-| Memory limits | `--max-old-space-size` | None | None | None |
-| Recovery model | Fix provider (reviewed) or platform orchestration; services stay declarative | Fix user's schema (their team) | Fix user's schema (their team) | Fix user's schema (their team) |
-
-### Defense-in-Depth: Runtime Safeguards
-
-Even with structural prevention, the emitter includes runtime guards in `src/safety.ts`:
-
-| Guard | Stage | What it catches |
-|---|---|---|
-| **Complexity budget** | Pre-expansion | Too many extensions per provider (defaults vary by provider) |
-| **Expansion timeout** | During expansion | Bugs in provider expansion code or runaway loops (per-provider / global limits) |
-| **Output size limit** | Post-generation | Combinatorial explosion (warn >100KB, error >1MB) |
-| **Permission expression validation** | Post-expansion | Typos, stale references, and cross-type subref mismatches in `Permission<"expr">` strings |
-
-These guards fail fast with actionable diagnostics. The complexity budget
-prevents expansion from starting; the timeout catches bugs in expansion code;
-the output size limit catches unexpected growth.
-
-### Adding New Extension Types (Providers)
-
-A new extension family is a **provider**, not a single template edit in platform
-`expand.ts`. Platform team review is required before registration.
-
-1. Add a new `.tsp` template under the provider's directory (declarative aliases
-   and types only).
-2. Implement `ExtensionProvider` in TypeScript (reviewed discovery + bounded
-   expansion, with declared cost metadata).
-3. Register the provider in `pipeline.ts` (and wire `buildRegistry` / templates
-   as needed).
-4. Service authors instantiate the template via aliases in `schema/*.tsp` only;
-   they still write zero computation.
-
-This keeps service schema declarative while allowing multiple independently reviewed
-expansion backends. A generic user-authored rule engine in `.tsp` would still break
-the same structural guarantee as before.
-
-## IR Contract
-
-The Intermediate Representation (IR) is the contract between the TypeSpec emitter
-(TypeScript) and downstream consumers (Go loader, CI tooling, etc.).
-
-**Current version:** `1.2.0` (defined as `IR_VERSION` in `src/types.ts`)
-
-### Field Semantics
-
-| Field | Type | Description |
-|---|---|---|
-| `version` | `string` | Semver IR format version. Bump minor for additive changes, major for breaking. |
-| `generatedAt` | `string` | ISO 8601 timestamp of generation (non-deterministic, excluded from diff). |
-| `source` | `string` | Schema-root-relative path to the compiled `.tsp` entry point (e.g. `schema/main.tsp`). |
-| `resources` | `ResourceDef[]` | Expanded resource definitions including RBAC scaffold mutations. |
-| `extensions` | `Record<string, unknown[]>` | Per-provider sections of discovered extension instances (shape defined by each provider; e.g. RBAC entries under that provider's key). |
-| `spicedb` | `string` | Generated SpiceDB/Zed schema text. |
-| `metadata` | `Record<string, ServiceMetadata>` | Per-application service metadata (permissions, resources, cascade policies, annotations). |
-| `jsonSchemas` | `Record<string, UnifiedJsonSchema>` | Generated JSON schemas for ExactlyOne assignable relations. |
-| `annotations` | `Record<string, Record<string, string>>` | Optional. Flattened resource annotations keyed by `application/resource`. |
-
-### Contract Rules
-
-1. The Go struct in `go-loader-example/schema/types.go` must stay in sync with
-   the TypeScript `IntermediateRepresentation` interface in `src/types.ts`.
-2. New fields must use `omitempty` in Go and `?` in TypeScript for backward compatibility.
-3. The `version` field must be bumped when the IR shape changes.
+| Risk | Mitigation |
+|------|-----------|
+| Node.js dependency in CI | TypeSpec compiler is the only runtime; no additional CLI scripts |
+| Schema growth | Bounded expansion (7 mutations per V1, 1 per cascade). Linear total work. |
+| Discovery fragility (RBAC) | Template walking handles both `model` and `alias` forms; integration tests verify |
+| Cross-type reference errors | Post-expansion validation catches stale subrefs; strict mode halts compilation |
+| TypeSpec version coupling | Minimal API surface used (compile, navigateProgram, emitFile) |

@@ -7,27 +7,29 @@ How to work with the TypeSpec schema from a service team's perspective.
 ## Where Things Live
 
 ```
-v2/typespec-as-schema/
+typespec-as-schema/
 ├── lib/                          <- PLATFORM-OWNED (don't touch)
 │   ├── kessel.tsp                   Core types: Assignable, Permission, BoolRelation, Cardinality
-│   └── kessel-extensions.tsp        Platform extension templates: CascadeDeletePolicy, ResourceAnnotation
-├── providers/                    <- SERVICE PROVIDERS
-│   └── rbac/                        RBAC provider (owns extension logic)
-│       ├── rbac.tsp                    Core RBAC types: Principal, Role, RoleBinding, Workspace
-│       ├── rbac-extensions.tsp         RBAC extension template: V1WorkspacePermission
-│       └── rbac-provider.ts            RBAC expansion logic (7 mutations, scaffold wiring)
+│   ├── kessel-extensions.tsp        Platform extension templates: CascadeDeletePolicy, ResourceAnnotation
+│   └── decorators.tsp               extern dec declarations: @cascadePolicy, @annotation
 ├── schema/                       <- SERVICE AUTHORS WORK HERE
-│   ├── main.tsp                     Entrypoint -- imports providers + services
+│   ├── main.tsp                     Entrypoint — imports all services
 │   ├── hbi.tsp                      HBI service (service team owns)
-│   └── remediations.tsp             Remediations service (service team owns)
+│   ├── remediations.tsp             Remediations service (service team owns)
+│   └── rbac/                        RBAC provider schema
+│       ├── rbac.tsp                    Core RBAC types: Principal, Role, RoleBinding, Workspace
+│       └── rbac-extensions.tsp         RBAC extension template: V1WorkspacePermission
 ├── src/                          <- PLATFORM-OWNED (don't touch)
-│   ├── provider.ts                  ExtensionProvider interface
-│   ├── primitives.ts                Resource graph mutations (ref, subref, or, and, addRelation, cascade delete)
-│   ├── discover-extensions.ts       Reusable template instance walking
-│   ├── discover-platform.ts         Platform annotation + cascade discovery
+│   ├── emitter.ts                   $onEmit — emitter plugin entry point
+│   ├── decorators.ts                Decorator implementations ($cascadePolicy, $annotation)
 │   ├── discover-resources.ts        Resource graph extraction from AST
-└── go-loader-example/            <- PLATFORM-OWNED
-    └── schema/                      Go structs + embedded IR
+│   ├── discover-decorated.ts        Decorator-based policy/annotation discovery
+│   ├── primitives.ts                Resource graph mutations (ref, subref, or, and, addRelation)
+│   ├── expand-cascade.ts            Cascade-delete expansion
+│   ├── generate.ts                  Output generators (SpiceDB, metadata, JSON Schema)
+│   ├── safety.ts                    Permission expression validation
+│   └── providers/rbac/
+│       └── rbac-provider.ts         RBAC expansion logic (7 mutations, scaffold wiring)
 ```
 
 Service teams work in `schema/`. Extension providers (for example RBAC)
@@ -37,16 +39,16 @@ that service teams never need to modify.
 
 ### What service authors use
 
-These are the building blocks from `lib/kessel.tsp`, `lib/kessel-extensions.tsp`, and `providers/rbac/rbac-extensions.tsp` (for `V1WorkspacePermission`):
+These are the building blocks from `lib/kessel.tsp`, `lib/kessel-extensions.tsp`, and `schema/rbac/rbac-extensions.tsp` (for `V1WorkspacePermission`):
 
 | TypeSpec construct | What it means | SpiceDB effect |
 |---|---|---|
 | `Assignable<Target, Cardinality>` | A relation that can be directly reported via API | `relation t_{name}: {target}` |
-| `Permission<"expr">` | A computed permission derived from other relations | `permission {name} = {expr}` |
+| `Permission<SubRef<"rel", "sub">>` | A computed permission derived from other relations | `permission {name} = t_{rel}->{sub}` |
 | `BoolRelation<Target>` | A boolean relation holding wildcards (`target:*`) | `relation t_{name}: {target}:*` |
-| `V1WorkspacePermission<App, Res, Verb, V2>` (`providers/rbac/rbac-extensions.tsp`) | Maps a V1 app:resource:verb to a workspace permission | 7 mutations on Role, RoleBinding, Workspace |
+| `V1WorkspacePermission<App, Res, Verb, V2>` (`schema/rbac/rbac-extensions.tsp`) | Maps a V1 app:resource:verb to a workspace permission | 7 mutations on Role, RoleBinding, Workspace |
 | `CascadeDeletePolicy<ChildApp, ChildRes, ParentRel>` | Adds delete permission on child via parent relation | 1 mutation on child resource |
-| `ResourceAnnotation<App, Res, Key, Val>` | Non-RBAC metadata (feature flags, retention, etc.) | None (IR metadata only) |
+| `ResourceAnnotation<App, Res, Key, Val>` | Non-RBAC metadata (feature flags, retention, etc.) | None (metadata JSON only) |
 
 ### Cardinality options
 
@@ -74,7 +76,7 @@ workspaces. They don't define their own resource types.
 // Registers workspace permissions without defining resource types.
 
 import "../lib/kessel.tsp";
-import "../providers/rbac/rbac-extensions.tsp";
+import "./rbac/rbac-extensions.tsp";
 
 using Kessel;
 
@@ -109,9 +111,9 @@ import "./notifications.tsp";
 **Run:**
 
 ```bash
-npx tsx src/spicedb-emitter.ts schema/main.tsp              # SpiceDB schema
-npx tsx src/spicedb-emitter.ts schema/main.tsp --metadata    # service metadata
-make demo                                                    # all outputs at once
+npx tsp compile schema/main.tsp                                                    # SpiceDB schema (default)
+npx tsp compile schema/main.tsp --option typespec-as-schema.output-format=metadata  # service metadata
+make demo                                                                           # all outputs at once
 ```
 
 **What happens automatically:**
@@ -154,8 +156,8 @@ model in addition to the permission aliases.
 import "@typespec/json-schema";
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
-import "../providers/rbac/rbac-extensions.tsp";
-import "../providers/rbac/rbac.tsp";
+import "./rbac/rbac-extensions.tsp";
+import "./rbac/rbac.tsp";
 
 using JsonSchema;
 using Kessel;
@@ -190,13 +192,13 @@ model Template {
   data: TemplateData;
 
   /** View permission: resolves via workspace */
-  view: Permission<"workspace.content_sources_template_view">;
+  view: Permission<SubRef<"workspace", "content_sources_template_view">>;
 
   /** Edit permission: resolves via workspace */
-  edit: Permission<"workspace.content_sources_template_edit">;
+  edit: Permission<SubRef<"workspace", "content_sources_template_edit">>;
 }
 
-// ── Metadata annotations (IR only, not in SpiceDB) ──────────────────
+// ── Metadata annotations (metadata JSON only, not in SpiceDB) ───────
 
 alias templateRetention = Kessel.ResourceAnnotation<
   "content_sources", "template", "retention_days", "365"
@@ -234,15 +236,6 @@ Metadata (`--metadata`):
     "annotations": {
       "content_sources/template:retention_days": "365"
     }
-  }
-}
-```
-
-Annotations (`--annotations`):
-```json
-{
-  "content_sources/template": {
-    "retention_days": "365"
   }
 }
 ```
@@ -292,10 +285,10 @@ model Group {
   data: GroupData;
 
   /** View permission */
-  view: Permission<"workspace.inventory_group_view">;
+  view: Permission<SubRef<"workspace", "inventory_group_view">>;
 
   /** Update permission */
-  update: Permission<"workspace.inventory_group_update">;
+  update: Permission<SubRef<"workspace", "inventory_group_update">>;
 }
 ```
 
@@ -382,24 +375,26 @@ Every extension spans a trust boundary across three layers:
 
 ```
   SERVICE AUTHORS          PROVIDER TEAMS              PLATFORM TEAM
-  (schema/)                (providers/rbac/)           (lib/ + src/)
+  (schema/)                (schema/rbac/)              (lib/ + src/)
   ─────────────            ───────────────             ─────────────────
   Write alias              RBAC example:             Core types in lib/;
-  declarations:            V1WorkspacePermission      primitives, pipeline,
-  alias foo =              template in                discover-extensions/
-    Kessel.Template<       rbac-extensions.tsp;      platform/resources;
-    "p1", "p2"             expansion + wiring in      non-RBAC templates in
-  >;                       rbac-provider.ts           kessel-extensions.tsp
+  declarations:            V1WorkspacePermission      emitter, decorators,
+  alias foo =              template in                discover-decorated/
+    Kessel.Template<       rbac-extensions.tsp;      resources; non-RBAC
+    "p1", "p2"             expansion + wiring in      templates in kessel-
+  >;                       rbac-provider.ts           extensions.tsp
 
   Zero computation.        Provider-owned logic       Platform-owned
   Only type aliases.       for that domain.           infrastructure.
 ```
 
-Adding a new **platform-neutral** extension template still means platform
-changes (template in `lib/kessel-extensions.tsp`, registry, discovery,
-expansion, pipeline). Adding a **provider-owned** extension (like
-`V1WorkspacePermission`) is done by the provider team under `providers/`.
-Service authors then consume extensions by writing aliases only -- no
+Adding a new **platform-neutral** extension template means platform
+changes (template in `lib/kessel-extensions.tsp`, decorator in
+`lib/decorators.tsp` + `src/decorators.ts`, discovery in
+`src/discover-decorated.ts`, expansion, emitter wiring). Adding a
+**provider-owned** extension (like `V1WorkspacePermission`) is done by
+the provider team under `schema/rbac/` + `src/providers/rbac/`.
+Service authors then consume extensions by writing aliases only — no
 TypeScript, no logic.
 
 ---
@@ -451,19 +446,21 @@ model ContingentPermission<
 }
 ```
 
-**`src/registry.ts`** -- add to `PLATFORM_TEMPLATES`:
+**`lib/decorators.tsp`** — add the decorator declaration:
 
-```typescript
-export const PLATFORM_TEMPLATES: readonly ExtensionTemplateDef[] = [
-  { templateName: "ResourceAnnotation",    paramNames: ["application", "resource", "key", "value"], namespace: "Kessel" },
-  { templateName: "CascadeDeletePolicy",   paramNames: ["childApplication", "childResource", "parentRelation"], namespace: "Kessel" },
-  { templateName: "ContingentPermission",  paramNames: ["first", "second", "contingent"], namespace: "Kessel" },  // <- add
-];
+```typespec
+extern dec contingentPermission(target: Model);
 ```
 
-The pipeline calls `buildRegistry(providers)` to combine `PLATFORM_TEMPLATES` with provider-contributed templates, so the new template is automatically included in discovery.
+**`src/decorators.ts`** — implement it:
 
-**`src/discover-platform.ts`** -- add a discovery function:
+```typescript
+export function $contingentPermission(context: DecoratorContext, target: Model) {
+  context.program.stateSet(StateKeys.contingentPermission).add(target);
+}
+```
+
+**`src/discover-decorated.ts`** — add a discovery function:
 
 ```typescript
 export interface ContingentExtension {
@@ -472,21 +469,22 @@ export interface ContingentExtension {
   contingent: string;
 }
 
-export function discoverContingentPermissions(
-  program: Program,
-  warnings?: DiscoveryWarnings,
-): ContingentExtension[] {
-  const def = getTemplate("ContingentPermission");
-  const { results, skipped } = discoverExtensionInstances(program, def);
-  if (warnings) warnings.skipped.push(...skipped);
-  return results.filter(
-    (p): p is Record<string, string> & ContingentExtension =>
-      !!(p.first && p.second && p.contingent),
-  );
+export function discoverDecoratedContingentPermissions(program: Program): ContingentExtension[] {
+  const tagged = program.stateSet(StateKeys.contingentPermission);
+  const results: ContingentExtension[] = [];
+
+  for (const type of tagged) {
+    if (type.kind !== "Model") continue;
+    const params = extractParams(type as Model, ["first", "second", "contingent"]);
+    if (!params.first || !params.second || !params.contingent) continue;
+    results.push({ first: params.first, second: params.second, contingent: params.contingent });
+  }
+
+  return results;
 }
 ```
 
-**`src/primitives.ts`** -- add pure expansion logic (no TypeSpec imports):
+**`src/primitives.ts`** — add pure expansion logic (no TypeSpec imports):
 
 ```typescript
 export function expandContingentPermissions(
@@ -508,11 +506,11 @@ export function expandContingentPermissions(
 }
 ```
 
-**`src/pipeline.ts`** -- wire into the pipeline:
+**`src/emitter.ts`** — wire into the pipeline:
 
 ```typescript
 // After V1 expansion:
-const contingentPerms = discoverContingentPermissions(program, discoveryWarnings);
+const contingentPerms = discoverDecoratedContingentPermissions(program);
 const contingentResult = expandContingentPermissions(expanded, contingentPerms);
 ```
 
@@ -614,17 +612,21 @@ model ExposeHostPermission<
 }
 ```
 
-**`src/registry.ts`** -- add to `PLATFORM_TEMPLATES`:
+**`lib/decorators.tsp`** — add the decorator declaration:
 
-```typescript
-export const PLATFORM_TEMPLATES: readonly ExtensionTemplateDef[] = [
-  // ... existing entries ...
-  { templateName: "ContingentPermission",  paramNames: ["first", "second", "contingent"], namespace: "Kessel" },
-  { templateName: "ExposeHostPermission",  paramNames: ["v2Perm", "hostPerm"], namespace: "Kessel" },  // <- add
-];
+```typespec
+extern dec exposeHostPermission(target: Model);
 ```
 
-**`src/discover-platform.ts`** -- add discovery:
+**`src/decorators.ts`** — implement it:
+
+```typescript
+export function $exposeHostPermission(context: DecoratorContext, target: Model) {
+  context.program.stateSet(StateKeys.exposeHostPermission).add(target);
+}
+```
+
+**`src/discover-decorated.ts`** — add discovery:
 
 ```typescript
 export interface ExposeHostExtension {
@@ -632,21 +634,22 @@ export interface ExposeHostExtension {
   hostPerm: string;
 }
 
-export function discoverExposeHostPermissions(
-  program: Program,
-  warnings?: DiscoveryWarnings,
-): ExposeHostExtension[] {
-  const def = getTemplate("ExposeHostPermission");
-  const { results, skipped } = discoverExtensionInstances(program, def);
-  if (warnings) warnings.skipped.push(...skipped);
-  return results.filter(
-    (p): p is Record<string, string> & ExposeHostExtension =>
-      !!(p.v2Perm && p.hostPerm),
-  );
+export function discoverDecoratedExposeHostPermissions(program: Program): ExposeHostExtension[] {
+  const tagged = program.stateSet(StateKeys.exposeHostPermission);
+  const results: ExposeHostExtension[] = [];
+
+  for (const type of tagged) {
+    if (type.kind !== "Model") continue;
+    const params = extractParams(type as Model, ["v2Perm", "hostPerm"]);
+    if (!params.v2Perm || !params.hostPerm) continue;
+    results.push({ v2Perm: params.v2Perm, hostPerm: params.hostPerm });
+  }
+
+  return results;
 }
 ```
 
-**`src/primitives.ts`** -- add pure expansion:
+**`src/primitives.ts`** — add pure expansion:
 
 ```typescript
 export function expandExposeHostPermissions(
@@ -671,11 +674,11 @@ export function expandExposeHostPermissions(
 }
 ```
 
-**`src/pipeline.ts`** -- wire into the pipeline:
+**`src/emitter.ts`** — wire into the pipeline:
 
 ```typescript
 // After contingent expansion:
-const exposeHostPerms = discoverExposeHostPermissions(program, discoveryWarnings);
+const exposeHostPerms = discoverDecoratedExposeHostPermissions(program);
 const exposeResult = expandExposeHostPermissions(contingentResult, exposeHostPerms);
 ```
 
@@ -706,8 +709,8 @@ extension types. This matches the production
 ```typespec
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
-import "../providers/rbac/rbac-extensions.tsp";
-import "../providers/rbac/rbac.tsp";
+import "./rbac/rbac-extensions.tsp";
+import "./rbac/rbac.tsp";
 import "./hbi.tsp";
 
 using Kessel;
@@ -823,7 +826,7 @@ created by earlier ones:
 4. view_metadata accumulation -> ORs all read-verb perms (after all workspace perms exist)
 ```
 
-This ordering is explicit in `src/pipeline.ts` (called by `spicedb-emitter.ts`).
+This ordering is explicit in `src/emitter.ts` (`$onEmit`).
 No implicit dependency resolution is needed.
 
 ---
@@ -852,7 +855,7 @@ Service authors never write computation -- only type alias declarations.
 | New data fields on existing type | Service team | Edit `*Data` model | ~5 | No |
 | Attach metadata annotation | Service team | 1 alias line | ~5 | No |
 | Use existing extension template | Service team | 1 alias line | ~5 | No |
-| **New extension template** | Platform or provider team | Template + discovery (discover-platform.ts) + expansion (primitives.ts) or provider package (`providers/…`) | ~50 | Yes |
+| **New extension template** | Platform or provider team | Template + decorator + discovery (discover-decorated.ts) + expansion (primitives.ts) + emitter wiring | ~50 | Yes |
 
 The last row is the only case requiring TypeScript, and that work is
 done by the platform or owning provider team -- not service teams. The structural safety

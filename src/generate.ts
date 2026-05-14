@@ -1,16 +1,6 @@
-import * as path from "path";
-import {
-  IR_VERSION,
-  type ResourceDef,
-  type UnifiedJsonSchema,
-  type ServiceMetadata,
-  type IntermediateRepresentation,
-  type CascadeDeleteEntry,
-  type AnnotationEntry,
-} from "./types.js";
-import { bodyToZed, slotName, flattenAnnotations, isAssignable } from "./utils.js";
-import type { ProviderDiscoveryResult } from "./types.js";
-import type { ExtensionProvider } from "./provider.js";
+import type { ResourceDef, UnifiedJsonSchema, CascadeDeleteEntry, AnnotationEntry, ServiceMetadata } from "./types.js";
+import { bodyToZed, slotName, isAssignable } from "./utils.js";
+import type { V1Extension } from "./providers/rbac/rbac-provider.js";
 
 export function generateSpiceDB(resources: ResourceDef[]): string {
   const lines: string[] = [];
@@ -45,10 +35,6 @@ export function generateSpiceDB(resources: ResourceDef[]): string {
   return lines.join("\n");
 }
 
-/**
- * Generates unified JSON schemas for resources, excluding provider-owned
- * namespaces (e.g., "rbac") which are internal to their provider.
- */
 export function generateUnifiedJsonSchemas(
   resources: ResourceDef[],
   ownedNamespaces?: Set<string>,
@@ -93,14 +79,9 @@ export function generateUnifiedJsonSchemas(
   return schemas;
 }
 
-/**
- * Generates service metadata from provider discovery results and resources.
- * Param key mapping is driven by the provider interface — no hard-coded keys.
- */
 export function generateMetadata(
   resources: ResourceDef[],
-  providerResults: ProviderDiscoveryResult[],
-  providerMap: ReadonlyMap<string, ExtensionProvider>,
+  permissions: V1Extension[],
   ownedNamespaces?: Set<string>,
   annotations?: Map<string, AnnotationEntry[]>,
   cascadePolicies?: CascadeDeleteEntry[],
@@ -115,18 +96,8 @@ export function generateMetadata(
     return metadata[app];
   }
 
-  for (const pr of providerResults) {
-    const provider = providerMap.get(pr.providerId);
-    const appKey = provider?.applicationParamKey;
-    const permKey = provider?.permissionParamKey;
-    if (!appKey || !permKey) continue;
-    for (const ext of pr.discovered) {
-      const app = ext.params[appKey];
-      const perm = ext.params[permKey];
-      if (app && perm) {
-        ensure(app).permissions.push(perm);
-      }
-    }
+  for (const perm of permissions) {
+    ensure(perm.application).permissions.push(perm.v2Perm);
   }
 
   for (const res of resources) {
@@ -155,36 +126,4 @@ export function generateMetadata(
   }
 
   return metadata;
-}
-
-export function generateIR(
-  mainFile: string,
-  fullSchema: ResourceDef[],
-  providerResults: ProviderDiscoveryResult[],
-  providerMap: ReadonlyMap<string, ExtensionProvider>,
-  ownedNamespaces?: Set<string>,
-  annotations?: Map<string, AnnotationEntry[]>,
-  cascadePolicies?: CascadeDeleteEntry[],
-): IntermediateRepresentation {
-  const extensionsByProvider: Record<string, Record<string, string>[]> = {};
-  for (const pr of providerResults) {
-    extensionsByProvider[pr.providerId] = pr.discovered.map((d) => d.params);
-  }
-
-  const ir: IntermediateRepresentation = {
-    version: IR_VERSION,
-    generatedAt: new Date().toISOString(),
-    source: `schema/${path.basename(mainFile)}`,
-    resources: fullSchema,
-    extensions: extensionsByProvider,
-    spicedb: generateSpiceDB(fullSchema),
-    metadata: generateMetadata(fullSchema, providerResults, providerMap, ownedNamespaces, annotations, cascadePolicies),
-    jsonSchemas: generateUnifiedJsonSchemas(fullSchema, ownedNamespaces),
-  };
-
-  if (annotations && annotations.size > 0) {
-    ir.annotations = flattenAnnotations(annotations);
-  }
-
-  return ir;
 }

@@ -6,7 +6,7 @@ import {
   findResource,
   slotName,
 } from "../../src/lib.js";
-import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../schema/rbac/rbac-provider.js";
+import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../src/providers/rbac/rbac-provider.js";
 import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
 
 function makeBaseRbacResources(): ResourceDef[] {

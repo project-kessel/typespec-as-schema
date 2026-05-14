@@ -1,114 +1,88 @@
-# TypeSpec Emitter Plugin Roadmap
+# TypeSpec Emitter Plugin — Implementation Notes
 
-This document covers the path from the current standalone CLI pipeline to a registered TypeSpec emitter plugin (`$onEmit`), including what's required, what can be reused, and when to migrate.
+This document records the architecture decisions made during the migration from a standalone CLI to a registered TypeSpec emitter plugin.
 
 ---
 
 ## Current Architecture
 
-The Kessel schema emitter is a **standalone TypeScript CLI** that uses the TypeSpec compiler as a library. It does not register as a TypeSpec emitter plugin and does not use custom decorators.
+The Kessel schema emitter is a **registered TypeSpec emitter plugin** (`$onEmit`) with custom decorators.
 
 ```
-schema/*.tsp ──> compile() ──> Program ──> discover ──> provider expand ──> validate ──> generate
-                 (library)      (AST)       (walk)      (primitives)        (safety)     (emit)
+schema/*.tsp ──> tsp compile ──> Program ──> $onEmit ──> discover ──> expand ──> validate ──> emit
+                                 (AST + state sets)       (decorator-based)       (safety)     (files)
 ```
 
 Key properties:
 
-- **Single entry point**: `pipeline.ts` orchestrates the full compile-discover-expand-validate-generate flow in ~60 lines.
-- **No plugin lifecycle**: No `$onEmit`, no `$onValidate`, no decorator state bags. The pipeline calls `compile(NodeHost, mainFile, { noEmit: true })` and walks the resulting `Program` object.
-- **Testable without infrastructure**: Unit tests call pure functions on data structures. Integration tests call `compilePipeline()` directly. No `createTestRunner()` or in-memory file system needed.
-- **Model templates as data carriers**: `V1WorkspacePermission`, `CascadeDeletePolicy`, and `ResourceAnnotation` are parameterized TypeSpec models that carry string parameters but have zero compile-time behavior.
-
-This was chosen so the full pipeline is visible in one file and can be tested without TypeSpec plugin infrastructure.
+- **Plugin entry point**: `src/index.ts` exports `$lib`, `$onEmit`, and decorator implementations (`$cascadePolicy`, `$annotation`).
+- **Compiler-managed lifecycle**: The TypeSpec compiler calls `$onEmit` after compilation, providing an `EmitContext` with the compiled `Program` and resolved emitter options.
+- **Decorator-based discovery**: `@cascadePolicy` and `@annotation` tag models into compiler state sets, eliminating brittle name-based matching.
+- **Emitter options**: `output-format` (`spicedb` | `metadata` | `unified-jsonschema`) and `strict` (boolean) are defined via `createTypeSpecLibrary` and validated by the compiler.
+- **Testable**: Unit tests call pure functions on data structures. Integration tests call `compilePipeline()` which mirrors the emitter pipeline.
 
 ---
 
-## What a TypeSpec Emitter Plugin Requires
-
-### 1. Package structure
-
-An emitter plugin is an npm package that exports `$onEmit` and `$lib`. The current `package.json` already has `"tspMain": "lib/kessel-extensions.tsp"`, so the compiler knows this package provides TypeSpec types. The JS entry point needs to be added:
+## Package Structure
 
 ```json
 {
+  "tspMain": "lib/kessel.tsp",
   "exports": {
-    ".": {
-      "typespec": "./lib/kessel-extensions.tsp",
-      "default": "./dist/index.js"
-    }
+    ".": "./dist/index.js"
   }
 }
 ```
 
-### 2. Library definition with emitter options
+The compiler resolves the package for both:
+- TypeSpec types (via `tspMain` → `lib/kessel.tsp`)
+- JS emitter (via `exports["."]` → `dist/index.js` which exports `$lib`, `$onEmit`, decorators)
 
-Create a `$lib` using `createTypeSpecLibrary` that defines the emitter's configuration schema:
+---
+
+## Library Definition
+
+`src/lib.ts` defines the emitter library:
 
 ```typescript
-import { createTypeSpecLibrary, type JSONSchemaType } from "@typespec/compiler";
-
-export interface KesselEmitterOptions {
-  "output-format": "spicedb" | "ir" | "metadata" | "unified-jsonschema" | "annotations";
-  "ir-output-path"?: string;
-  "strict"?: boolean;
-}
-
-const optionsSchema: JSONSchemaType<KesselEmitterOptions> = {
-  type: "object",
-  properties: {
-    "output-format": {
-      type: "string",
-      enum: ["spicedb", "ir", "metadata", "unified-jsonschema", "annotations"],
-      nullable: true,
-    },
-    "ir-output-path": { type: "string", format: "absolute-path", nullable: true },
-    "strict": { type: "boolean", nullable: true },
-  },
-  required: [],
-  additionalProperties: false,
-};
-
 export const $lib = createTypeSpecLibrary({
-  name: "kessel-emitter",
+  name: "typespec-as-schema",
   diagnostics: {
-    // Custom diagnostics would go here
+    "invalid-permission-expr": {
+      severity: "error",
+      messages: { default: paramMessage`Invalid permission expression: "${"expr"}"` },
+    },
   },
   emitter: { options: optionsSchema },
 });
 ```
 
-### 3. The `$onEmit` function
+Options schema:
 
-This replaces `spicedb-emitter.ts` as the entry point. The key difference: you receive an `EmitContext` with a `program` already compiled, instead of calling `compile()` yourself:
+| Option | Type | Values | Default |
+|--------|------|--------|---------|
+| `output-format` | string enum | `spicedb`, `metadata`, `unified-jsonschema` | `spicedb` |
+| `strict` | boolean | `true` / `false` | `false` |
 
-```typescript
-import { type EmitContext, emitFile, resolvePath } from "@typespec/compiler";
-import type { KesselEmitterOptions } from "./lib.js";
+---
 
-export async function $onEmit(context: EmitContext<KesselEmitterOptions>) {
-  if (context.program.compilerOptions.noEmit) return;
+## Custom Decorators
 
-  // Existing pipeline stages work unchanged:
-  const allTemplates = buildRegistry(providers);
-  const { resources } = discoverResources(context.program, allTemplates);
-  const annotations = discoverAnnotations(context.program);
-  const cascadePolicies = discoverCascadeDeletePolicies(context.program);
-  // Providers run their own discover() + expand() via ExtensionProvider
+Two decorators provide reliable discovery via compiler state sets:
 
-  // ... expand, validate, generate ...
+### `@cascadePolicy`
 
-  // Use emitFile instead of fs.writeFileSync
-  await emitFile(context.program, {
-    path: resolvePath(context.emitterOutputDir, "schema.zed"),
-    content: spicedbOutput,
-  });
-}
-```
+Tags a model as a cascade-delete policy declaration. The `discoverDecoratedCascadePolicies()` function reads `StateKeys.cascadePolicy` to find all tagged models.
 
-### 4. tspconfig.yaml integration
+### `@annotation`
 
-Users add the emitter alongside the existing JSON Schema one:
+Tags a model as a resource annotation. The `discoverDecoratedAnnotations()` function reads `StateKeys.annotation` to find all tagged models.
+
+Both are declared as `extern dec` in `lib/decorators.tsp` and implemented in `src/decorators.ts`.
+
+---
+
+## tspconfig.yaml Integration
 
 ```yaml
 emit:
@@ -119,105 +93,44 @@ options:
     emitter-output-dir: "{output-dir}/json-schema"
   "typespec-as-schema":
     output-format: spicedb
-    strict: true
 ```
 
-Now `tsp compile` runs both emitters in one pass, solving the two-invocation consistency gap.
+A single `tsp compile` invocation runs both emitters, producing JSON Schema fragments and the selected Kessel output format.
 
 ---
 
-## Optional Custom Decorators
+## Module Reuse from CLI Era
 
-Going the plugin route gives access to decorator infrastructure. Two decorators would address the current architecture's known fragility points:
+| Module | Status | Notes |
+|--------|--------|-------|
+| `types.ts` | Unchanged | Core data types |
+| `utils.ts` | Unchanged | Pure helpers |
+| `primitives.ts` | Unchanged | Graph mutation builders |
+| `discover-resources.ts` | Unchanged | Resource graph extraction |
+| `expand-cascade.ts` | Unchanged | Cascade-delete expansion |
+| `safety.ts` | Unchanged | Permission expression validation |
+| `generate.ts` | Unchanged | Output generators (SpiceDB, metadata, JSON Schema) |
+| `providers/rbac/rbac-provider.ts` | Unchanged | RBAC expansion logic |
+| `discover-decorated.ts` | **New** | Replaces template-walking discovery with decorator state sets |
+| `decorators.ts` | **New** | Decorator implementations |
+| `emitter.ts` | **Replaced** `pipeline.ts` | `$onEmit` orchestrates the pipeline |
+| `lib.ts` | **Adapted** | Added `$lib`, `StateKeys`, emitter options |
+| `index.ts` | **New** | Package entry point |
 
-### `@kesselExtension` — reliable discovery
-
-Currently, `discover-extensions.ts` identifies extension template instances through name-based matching (`isInstanceOf` falls back to comparing `model.name` and namespace strings). A decorator gives you a compiler-guaranteed state set:
-
-```typescript
-// Decorator implementation
-export function $kesselExtension(context: DecoratorContext, target: Model) {
-  context.program.stateSet(StateKeys.kesselExtension).add(target);
-}
-
-// Discovery becomes trivial
-for (const model of program.stateSet(StateKeys.kesselExtension)) {
-  // guaranteed to be a tagged model — no name matching needed
-}
-```
-
-### `@permissionExpr` — compile-time expression validation
-
-Currently, `Permission<"workspace.inventory_host_view">` passes a string literal through the type system. Validation only happens post-pipeline. A decorator could validate at compile time:
-
-```typescript
-export function $permissionExpr(context: DecoratorContext, target: ModelProperty, expr: string) {
-  const parsed = parsePermissionExpr(expr);
-  if (!parsed) {
-    context.program.reportDiagnostic({
-      code: "invalid-permission-expr",
-      target,
-      message: `Invalid permission expression: "${expr}"`,
-    });
-  }
-}
-```
-
-This gives schema authors red squiggles in their IDE via the TypeSpec language server, instead of post-pipeline errors.
+Removed: `spicedb-emitter.ts` (CLI), `pipeline.ts` (standalone orchestrator), `provider.ts` (ExtensionProvider interface), `registry.ts`, `discover-extensions.ts`, `discover-platform.ts`.
 
 ---
 
-## Reuse Matrix
+## Design Decisions
 
-Most existing modules carry over unchanged. The pipeline architecture was designed with this separation in mind.
+### Why decorators over template walking
 
-| Module | Reuse | Changes needed |
-|--------|-------|----------------|
-| `types.ts` | As-is | None |
-| `utils.ts` | As-is | None |
-| `parser.ts` | As-is | None |
-| `registry.ts` | As-is | None |
-| `primitives.ts` | As-is | Pure data transforms (graph mutations + cascade delete), no TypeSpec imports |
-| `discover-extensions.ts` | Mostly | Could simplify if using decorator state sets instead of name matching |
-| `discover-platform.ts` | As-is | Platform annotation/cascade discovery |
-| `discover-resources.ts` | As-is | Resource graph extraction |
-| `safety.ts` | As-is | Wire limits from emitter options instead of `PipelineOptions` |
-| `generate.ts` | As-is | Use `emitFile()` instead of `fs.writeFileSync()` |
-| `pipeline.ts` | Replace | `$onEmit` becomes the orchestrator; remove `compile()` call |
-| `spicedb-emitter.ts` | Remove | CLI replaced by `tsp compile --emit` |
-| `lib.ts` | Adapt | Add `$lib`, `$onEmit`, optional decorator exports |
+Template-based discovery relied on name matching (`model.name === "CascadeDeletePolicy"`) which is fragile across namespaces and aliasing. Decorator state sets are compiler-guaranteed: if `@cascadePolicy` is on a model, it appears in the state set regardless of how it was instantiated.
 
-**Lines of code impact**: ~80% of the codebase (`types.ts`, `utils.ts`, `parser.ts`, `registry.ts`, `primitives.ts`, `discover-*.ts`, `safety.ts`, `generate.ts`) is pure data transformation with no coupling to the CLI entry point. The main work is writing the `$lib` + `$onEmit` boilerplate (~50 lines) and adapting integration tests.
+### Why a single provider (RBAC) is called directly
 
----
+The `ExtensionProvider` interface was removed because there is currently only one provider (RBAC). The emitter calls `discoverV1Permissions`, `expandV1Permissions`, and `wireDeleteScaffold` directly. If additional providers are needed, a provider registry can be reintroduced.
 
-## Migration Triggers
+### Why three separate output formats instead of a bundled IR
 
-The current standalone CLI architecture is the right choice today. Convert to a plugin when one of these triggers is hit:
-
-| Trigger | Why it matters |
-|---------|---------------|
-| **Atomic multi-output** | Need `tsp compile` to produce SpiceDB + JSON Schema + IR in one pass with guaranteed consistency |
-| **IDE diagnostics** | Want red squiggles for invalid permission expressions in VS Code via the TypeSpec language server |
-| **npm distribution** | Other teams need to `npm install` the emitter and configure it via `tspconfig.yaml` |
-| **Watch mode via compiler** | Need `tsp compile --watch` integration (though the CLI now has its own `--watch`) |
-| **Decorator-based discovery** | Schema grows large enough that name-based discovery becomes unreliable |
-
----
-
-## What You Lose
-
-| Aspect | Current (CLI) | Plugin |
-|--------|--------------|--------|
-| **Pipeline visibility** | Single file (`pipeline.ts`) shows full flow | `$onEmit` replaces it — functionally the same, just triggered by compiler lifecycle |
-| **CLI ergonomics** | `--preview <perm>`, `--metadata`, `--annotations` are CLI flags | Become emitter options: `--option kessel-emitter.output-format=metadata` |
-| **Test simplicity** | `compilePipeline()` + pure function unit tests | Integration tests need `createTestRunner()` from `@typespec/compiler/testing` |
-| **No plugin versioning** | Depend only on `@typespec/compiler` as a library | Must maintain plugin lifecycle compatibility across TypeSpec versions |
-
----
-
-## Recommended Path
-
-1. **Now**: Use the standalone CLI with the improvements from the current iteration (verb type narrowing, discovery stats, pre-expansion validation, unified compilation, watch mode).
-2. **When a trigger hits**: Convert to a plugin. The conversion cost is modest — most code is already decoupled from the CLI entry point.
-3. **Incremental step**: If only discovery reliability is a concern, add a single `@kesselExtension` decorator without going to a full plugin. This can be registered in the standalone CLI by importing it before calling `compile()`.
+The TypeSpec, Starlark, and CUE POCs all produce the same three standalone outputs directly. A bundled IR artifact added an extra layer unique to TypeSpec without providing value over running `tsp compile` three times or extending the emitter to produce multiple outputs per invocation.

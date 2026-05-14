@@ -54,8 +54,8 @@ model WidgetData {
 model Widget {
   workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
   data: WidgetData;
-  view: Permission<"workspace.myapp_widget_view">;
-  update: Permission<"workspace.myapp_widget_update">;
+  view: Permission<SubRef<"workspace", "myapp_widget_view">>;
+  update: Permission<SubRef<"workspace", "myapp_widget_update">>;
 }
 ```
 

@@ -1,4 +1,4 @@
-import type { Namespace } from "@typespec/compiler";
+import type { Namespace, Model, Type } from "@typespec/compiler";
 import type { RelationBody, ResourceDef, AnnotationEntry } from "./types.js";
 
 export function getNamespaceFQN(ns: Namespace | undefined): string {
@@ -63,4 +63,26 @@ export function cloneResources(resources: ResourceDef[]): ResourceDef[] {
 
 export function isAssignable(body: RelationBody): boolean {
   return body.kind === "assignable" || body.kind === "bool";
+}
+
+// ─── TypeSpec model property extraction helpers ──────────────────────
+
+export function getStringValue(t: Type): string | undefined {
+  if ("value" in t && typeof (t as unknown as Record<string, unknown>).value === "string") {
+    return (t as unknown as { value: string }).value;
+  }
+  if (t.kind === "Scalar" && t.name) return t.name;
+  return undefined;
+}
+
+export function extractParams(model: Model, names: string[]): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const name of names) {
+    const prop = model.properties.get(name);
+    if (prop) {
+      const value = getStringValue(prop.type);
+      if (value) params[name] = value;
+    }
+  }
+  return params;
 }

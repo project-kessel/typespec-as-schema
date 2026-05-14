@@ -35,13 +35,14 @@ permission workspace = t_workspace
 A computed permission derived from set operations on other relations.
 
 ```typespec
-view: Permission<"workspace.inventory_host_view">
+view: Permission<SubRef<"workspace", "inventory_host_view">>
 ```
 
-Expression syntax:
-- `a.b` → arrow (subref): `t_a->b`
-- `a + b` → union: `a + b`
-- `a & b` → intersection: `(a & b)`
+Expression types:
+- `Ref<"name">` → reference: `name`
+- `SubRef<"rel", "sub">` → arrow (subref): `t_rel->sub`
+- `Or<A, B>` → union: `A + B`
+- `And<A, B>` → intersection: `(A & B)`
 - `a->b` → arrow: `t_a->b`
 - Parentheses for grouping: `(a + b) & c`
 

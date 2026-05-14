@@ -5,6 +5,7 @@
 import "@typespec/json-schema";
 import "../lib/kessel.tsp";
 import "../lib/kessel-extensions.tsp";
+import "../lib/decorators.tsp";
 import "./rbac/rbac-extensions.tsp";
 import "./rbac/rbac.tsp";
 
@@ -36,31 +37,20 @@ alias updatePermission = Kessel.V1WorkspacePermission<
 // ─── Cascade Delete Policy ──────────────────────────────────────────
 // When a workspace is deleted, hosts within it should be deletable.
 
-alias hostCascadeDelete = Kessel.CascadeDeletePolicy<
-  "inventory",
-  "host",
-  "workspace"
->;
+@cascadePolicy
+model hostCascadeDelete is CascadeDeletePolicy<"inventory", "host", "workspace">;
 
-// ─── Resource Annotations (→ IR metadata only) ─────────────────────
+// ─── Resource Annotations (→ metadata JSON only) ────────────────────
 // These do not affect SpiceDB schema — they attach service-specific
 // metadata to resources for consumption by downstream systems.
 
 /** Feature flag governing staleness detection version */
-alias hostStalenessFeature = Kessel.ResourceAnnotation<
-  "inventory",
-  "host",
-  "feature_flag",
-  "staleness_v2"
->;
+@annotation
+model hostStalenessFeature is ResourceAnnotation<"inventory", "host", "feature_flag", "staleness_v2">;
 
 /** Data retention policy in days */
-alias hostRetention = Kessel.ResourceAnnotation<
-  "inventory",
-  "host",
-  "retention_days",
-  "90"
->;
+@annotation
+model hostRetention is ResourceAnnotation<"inventory", "host", "retention_days", "90">;
 
 // ─── Host Data Schema (→ JSONSchema) ─────────────────────────────────
 // Native TypeSpec types with validation decorators.
@@ -103,9 +93,9 @@ model Host {
   data: HostData;
 
   // ── Computed permissions (via RBAC extension) ──
-  /** View permission: resolves to workspace.inventory_host_view */
-  view: Permission<"workspace.inventory_host_view">;
+  /** View permission: resolves to workspace->inventory_host_view */
+  view: Permission<SubRef<"workspace", "inventory_host_view">>;
 
-  /** Update permission: resolves to workspace.inventory_host_update */
-  update: Permission<"workspace.inventory_host_update">;
+  /** Update permission: resolves to workspace->inventory_host_update */
+  update: Permission<SubRef<"workspace", "inventory_host_update">>;
 }
