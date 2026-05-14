@@ -1,31 +1,13 @@
 // Remediations Service Schema
 // Permissions-only service: registers permissions on workspace without
-// defining any resource types. Demonstrates a service that only needs
-// authorization extensions, not data schemas.
+// defining any resource types.
 
-import "../lib/kessel.tsp";
-import "../lib/kessel-extensions.tsp";
-import "./rbac/rbac-extensions.tsp";
-import "./rbac/rbac.tsp";
+import "../lib/main.tsp";
 
 using Kessel;
 
 namespace Remediations;
 
-// ─── Extension Applications ──────────────────────────────────────────
-
-/** Maps remediations:remediations:read → remediations_remediation_view on workspace */
-alias remediationViewPermission = Kessel.V1WorkspacePermission<
-  "remediations",
-  "remediations",
-  "read",
-  "remediations_remediation_view"
->;
-
-/** Maps remediations:remediations:write → remediations_remediation_update on workspace */
-alias remediationUpdatePermission = Kessel.V1WorkspacePermission<
-  "remediations",
-  "remediations",
-  "write",
-  "remediations_remediation_update"
->;
+@v1Permission("remediations", "remediations", "read", "remediations_remediation_view")
+@v1Permission("remediations", "remediations", "write", "remediations_remediation_update")
+model RemediationsPermissions {}

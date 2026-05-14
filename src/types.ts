@@ -1,5 +1,3 @@
-export const IR_VERSION = "1.2.0";
-
 export interface RelationDef {
   name: string;
   body: RelationBody;
@@ -43,25 +41,4 @@ export interface ServiceMetadata {
   resources: string[];
   cascadeDeletePolicies?: string[];
   annotations?: Record<string, string>;
-}
-
-import type { DiscoveredExtension } from "./provider.js";
-
-export interface ProviderDiscoveryResult {
-  providerId: string;
-  discovered: DiscoveredExtension[];
-}
-
-export type ExtensionParams = Record<string, string>;
-
-export interface IntermediateRepresentation {
-  version: string;
-  generatedAt: string;
-  source: string;
-  resources: ResourceDef[];
-  extensions: Record<string, ExtensionParams[]>;
-  spicedb: string;
-  metadata: Record<string, ServiceMetadata>;
-  jsonSchemas: Record<string, UnifiedJsonSchema>;
-  annotations?: Record<string, Record<string, string>>;
 }

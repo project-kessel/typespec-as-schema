@@ -6,8 +6,9 @@ import {
   findResource,
   slotName,
 } from "../../src/lib.js";
-import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../schema/rbac/rbac-provider.js";
+import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../src/expand-v1.js";
 import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
+import { ResourceGraph } from "../../src/resource-graph.js";
 
 function makeBaseRbacResources(): ResourceDef[] {
   return [
@@ -36,6 +37,18 @@ function makeBaseRbacResources(): ResourceDef[] {
       ],
     },
   ];
+}
+
+function expandWithGraph(resources: ResourceDef[], permissions: V1Extension[]): { resources: ResourceDef[]; warnings: string[] } {
+  const graph = new ResourceGraph(resources);
+  expandV1Permissions(graph, permissions);
+  return { resources: graph.toResources(), warnings: graph.warnings };
+}
+
+function wireWithGraph(resources: ResourceDef[]): ResourceDef[] {
+  const graph = new ResourceGraph(resources);
+  wireDeleteScaffold(graph);
+  return graph.toResources();
 }
 
 const inventoryViewExt: V1Extension = {
@@ -73,7 +86,7 @@ function findRelation(resource: ResourceDef, name: string) {
 describe("V1 workspace permission expansion (expandV1Permissions)", () => {
   describe("Role wildcard relations", () => {
     it("adds four wildcard bool relations per extension to role", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), [inventoryViewExt]);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), [inventoryViewExt]);
       const role = findResource(result, "rbac", "role")!;
 
       const wildcards = ["inventory_any_any", "inventory_hosts_any", "inventory_any_read", "inventory_hosts_read"];
@@ -86,7 +99,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
     });
 
     it("adds computed v2 permission on role ORing wildcards and any_any_any", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), [inventoryViewExt]);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), [inventoryViewExt]);
       const role = findResource(result, "rbac", "role")!;
       const perm = findRelation(role, "inventory_host_view");
       expect(perm).toBeDefined();
@@ -102,7 +115,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
     });
 
     it("uses 'any' naming for wildcards, not 'all'", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), [inventoryViewExt]);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), [inventoryViewExt]);
       const role = findResource(result, "rbac", "role")!;
       const relNames = role.relations.map((r) => r.name);
       expect(relNames).not.toContain("inventory_all_all");
@@ -112,7 +125,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
 
   describe("RoleBinding intersection permissions", () => {
     it("adds intersection permission: subject & t_granted->v2Perm", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), [inventoryViewExt]);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), [inventoryViewExt]);
       const rb = findResource(result, "rbac", "role_binding")!;
       const perm = findRelation(rb, "inventory_host_view");
       expect(perm).toBeDefined();
@@ -126,7 +139,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
 
   describe("Workspace union permissions", () => {
     it("adds union permission: t_binding->v2Perm + t_parent->v2Perm", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), [inventoryViewExt]);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), [inventoryViewExt]);
       const ws = findResource(result, "rbac", "workspace")!;
       const perm = findRelation(ws, "inventory_host_view");
       expect(perm).toBeDefined();
@@ -138,7 +151,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
     });
 
     it("uses 'binding' naming, not 'user_grant'", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), [inventoryViewExt]);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), [inventoryViewExt]);
       const ws = findResource(result, "rbac", "workspace")!;
       const relNames = ws.relations.map((r) => r.name);
       expect(relNames).toContain("binding");
@@ -149,7 +162,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
   describe("view_metadata accumulation", () => {
     it("generates view_metadata on workspace from read-verb extensions only", () => {
       const extensions = [inventoryViewExt, inventoryUpdateExt, remediationsViewExt, remediationsUpdateExt];
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), extensions);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), extensions);
       const ws = findResource(result, "rbac", "workspace")!;
       const viewMeta = findRelation(ws, "view_metadata");
 
@@ -165,7 +178,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
     });
 
     it("does not generate view_metadata when no read-verb extensions exist", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), [inventoryUpdateExt]);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), [inventoryUpdateExt]);
       const ws = findResource(result, "rbac", "workspace")!;
       const viewMeta = findRelation(ws, "view_metadata");
       expect(viewMeta).toBeUndefined();
@@ -175,7 +188,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
   describe("G4: Cooperative extensions — idempotency", () => {
     it("does not produce duplicate wildcard relations when extensions share an application", () => {
       const extensions = [inventoryViewExt, inventoryUpdateExt];
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), extensions);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), extensions);
       const role = findResource(result, "rbac", "role")!;
 
       const appAdminCount = role.relations.filter((r) => r.name === "inventory_any_any").length;
@@ -189,7 +202,7 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
   describe("Multi-service expansion", () => {
     it("expands both inventory and remediations extensions onto RBAC types", () => {
       const extensions = [inventoryViewExt, inventoryUpdateExt, remediationsViewExt, remediationsUpdateExt];
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), extensions);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), extensions);
 
       const role = findResource(result, "rbac", "role")!;
       expect(findRelation(role, "inventory_host_view")).toBeDefined();
@@ -219,12 +232,12 @@ describe("V1 workspace permission expansion (expandV1Permissions)", () => {
           ],
         },
       ];
-      const { resources: result } = expandV1Permissions(resources, []);
+      const { resources: result } = expandWithGraph(resources, []);
       expect(findResource(result, "rbac", "principal")).toBeDefined();
     });
 
     it("does not duplicate principal if already present", () => {
-      const { resources: result } = expandV1Permissions(makeBaseRbacResources(), []);
+      const { resources: result } = expandWithGraph(makeBaseRbacResources(), []);
       const principals = result.filter((r) => r.name === "principal" && r.namespace === "rbac");
       expect(principals.length).toBe(1);
     });
@@ -277,7 +290,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
 
   it("adds delete permission to rbac/role referencing global wildcard", () => {
     const resources = makeHostWithRbac();
-    const scaffolded = wireDeleteScaffold(resources);
+    const scaffolded = wireWithGraph(resources);
     const { resources: result } = expandCascadeDeletePolicies(scaffolded, defaultPolicies);
     const role = findResource(result, "rbac", "role")!;
     const deletePerm = findRelation(role, "delete");
@@ -287,7 +300,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
 
   it("adds delete permission to rbac/role_binding as intersection", () => {
     const resources = makeHostWithRbac();
-    const scaffolded = wireDeleteScaffold(resources);
+    const scaffolded = wireWithGraph(resources);
     const { resources: result } = expandCascadeDeletePolicies(scaffolded, defaultPolicies);
     const rb = findResource(result, "rbac", "role_binding")!;
     const deletePerm = findRelation(rb, "delete");
@@ -300,7 +313,7 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
 
   it("adds delete permission to rbac/workspace as union", () => {
     const resources = makeHostWithRbac();
-    const scaffolded = wireDeleteScaffold(resources);
+    const scaffolded = wireWithGraph(resources);
     const { resources: result } = expandCascadeDeletePolicies(scaffolded, defaultPolicies);
     const ws = findResource(result, "rbac", "workspace")!;
     const deletePerm = findRelation(ws, "delete");
@@ -365,9 +378,9 @@ describe("CascadeDeletePolicy expansion (expandCascadeDeletePolicies)", () => {
 
   it("is idempotent — calling twice does not duplicate delete on RBAC types", () => {
     const resources = makeHostWithRbac();
-    const scaffolded1 = wireDeleteScaffold(resources);
+    const scaffolded1 = wireWithGraph(resources);
     const { resources: first } = expandCascadeDeletePolicies(scaffolded1, defaultPolicies);
-    const scaffolded2 = wireDeleteScaffold(first);
+    const scaffolded2 = wireWithGraph(first);
     const { resources: second } = expandCascadeDeletePolicies(scaffolded2, defaultPolicies);
     for (const name of ["role", "role_binding", "workspace"] as const) {
       const res = findResource(second, "rbac", name)!;
