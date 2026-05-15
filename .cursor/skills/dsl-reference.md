@@ -49,10 +49,10 @@ view: Permission<SubRef<"workspace", "inventory_host_view">>
 ```
 
 Expression types:
-- `Ref<"name">` → reference: `name`
-- `SubRef<"rel", "sub">` → arrow (subref): `t_rel->sub`
-- `Or<A, B>` → union: `A + B`
-- `And<A, B>` → intersection: `(A & B)`
+- `Ref<"name">` — reference: `name`
+- `SubRef<"rel", "sub">` — arrow (subref): `t_rel->sub`
+- `Or<A, B>` — union: `A + B`
+- `And<A, B>` — intersection: `(A & B)`
 
 ### BoolRelation
 
@@ -68,33 +68,48 @@ relation t_isAdmin: rbac/principal:*
 permission isAdmin = t_isAdmin
 ```
 
-## Decorators
+## Extension Templates
 
-### @v1Permission
+Extensions are TypeSpec model templates in provider-owned namespaces. Service authors use them via `alias` declarations.
 
-Registers a V1 workspace permission. Triggers 7 RBAC mutations and auto-wires a permission relation on the resource model.
+### RBAC: V1WorkspacePermission (`schema/rbac/rbac-extensions.tsp`)
+
+Namespace: `RBAC`
 
 ```typespec
-@v1Permission("inventory", "hosts", "read", "inventory_host_view")
-model Host {
-  workspace: WorkspaceRef;
-}
+alias myPerm = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
 ```
 
 Parameters: `(application, resource, verb, v2PermissionName)`
 
-Auto-wired relations by verb:
+The RBAC provider discovers these aliases and expands 7 mutations per instance across role / role_binding / workspace. It also auto-wires permission relations on the resource:
 
-| Verb | Relation |
-|------|----------|
+| Verb | Auto-wired relation |
+|------|---------------------|
 | `read` | `view` |
 | `write` | `update` |
 | `create` | `create` |
 | `delete` | `delete` |
 
+### HBI: ExposeHostPermission (`schema/hbi/hbi-extensions.tsp`)
+
+Namespace: `HBI`
+
+```typespec
+alias rosHost = HBI.ExposeHostPermission<"ros_read_analysis", "ros_read_analysis">;
+```
+
+Parameters: `(v2Perm, hostPerm)`
+
+The HBI provider adds a computed permission on `inventory/host` gated on `view & workspace->{v2Perm}`.
+
+## Platform Decorators
+
+These are platform-owned, applied directly on resource models:
+
 ### @cascadeDelete
 
-Wires a `delete` permission on the resource through the parent relation. Also creates the full RBAC chain (role → role_binding → workspace → child).
+Wires a `delete` permission on the resource through the parent relation. The RBAC provider scaffolds the delete chain on role / role_binding / workspace.
 
 ```typespec
 @cascadeDelete("workspace")
@@ -122,27 +137,23 @@ Parameters: `(key, value)` — both strings.
 
 App and resource names are inferred from the namespace and model name.
 
-## Extension Templates (`lib/kessel-extensions.tsp`)
+## Data Fields
 
-### V1WorkspacePermission (type definition)
-
-The underlying template type used by `@v1Permission`. Service authors should use the decorator instead of referencing this template directly.
+Data fields are native TypeSpec scalar properties on resource models. The emitter extracts them into the unified JSON schema with validation constraints.
 
 ```typespec
-model V1WorkspacePermission<App, Resource, Verb, V2Perm> { ... }
+model Host {
+  workspace: WorkspaceRef;
+
+  @format("uuid") subscription_manager_id?: string;
+  @maxLength(255) ansible_host?: string;
+  satellite_id?: UuidString | SatelliteNumericId;
+}
 ```
 
-### CascadeDeletePolicy
+Supported decorators: `@format`, `@maxLength`, `@minLength`, `@pattern`
 
-```typespec
-model CascadeDeletePolicy<ChildApp, ChildResource, ParentRelation> { ... }
-```
-
-### ResourceAnnotation
-
-```typespec
-model ResourceAnnotation<Application, Resource, Key, Value> { ... }
-```
+Optional fields are wrapped in `oneOf` with `null` in the JSON schema.
 
 ## CLI Commands
 
@@ -159,6 +170,9 @@ npx tsp compile schema/main.tsp --option typespec-as-schema.output-format=unifie
 # Strict mode (post-expansion validation failures → errors)
 npx tsp compile schema/main.tsp --option typespec-as-schema.strict=true
 
+# All outputs at once
+make run
+
 # Run tests
 npx vitest run
 ```
@@ -169,7 +183,8 @@ npx vitest run
 |---------|------------|---------|
 | Namespace | PascalCase in TypeSpec | `Inventory` → `inventory/` in SpiceDB |
 | Resource model | PascalCase | `Host` → `inventory/host` |
+| Extension namespace | PascalCase, provider-owned | `RBAC`, `HBI` |
 | V2 permission | `{app}_{resource}_{action}` | `inventory_host_view` |
 | Relation slot in Zed | `t_{relation}` | `t_workspace` |
 | Application | lowercase, underscore separated | `content_sources` |
-| Resource (in decorator) | lowercase plural | `hosts`, `templates` |
+| Resource (in template) | lowercase plural | `hosts`, `templates` |

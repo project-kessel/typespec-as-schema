@@ -1,10 +1,10 @@
 # Add a V1 Workspace Permission
 
-Guide for registering a new permission via the `@v1Permission` decorator.
+Guide for registering a new permission via a `V1WorkspacePermission` template alias.
 
 ## What This Does
 
-Each `@v1Permission` triggers **exactly 7 mutations** on RBAC types:
+Each `V1WorkspacePermission` alias triggers **exactly 7 mutations** on RBAC types:
 
 1. `rbac/role` — 4 bool relations for the hierarchy (`app_any_any`, `app_res_any`, `app_any_verb`, `app_res_verb`)
 2. `rbac/role` — 1 computed permission (union of the 4 hierarchy levels + `any_any_any`)
@@ -12,7 +12,7 @@ Each `@v1Permission` triggers **exactly 7 mutations** on RBAC types:
 4. `rbac/workspace` — 1 union permission (`binding->v2perm + parent->v2perm`)
 5. If verb is `"read"`, the permission is accumulated into `workspace.view_metadata`
 
-Additionally, the emitter **auto-wires** a permission relation on the resource model:
+Additionally, the RBAC provider **auto-wires** a permission relation on the resource model:
 
 | Verb | Auto-wired relation |
 |------|---------------------|
@@ -23,15 +23,19 @@ Additionally, the emitter **auto-wires** a permission relation on the resource m
 
 ## Steps
 
-### 1. Add the decorator
+### 1. Add a template alias
 
-On your resource model (or a standalone permissions model):
+In your service `.tsp` file, import the RBAC extensions and create an alias:
 
 ```typespec
-@v1Permission("myapp", "widgets", "read", "myapp_widget_view")
-model Widget {
-  workspace: WorkspaceRef;
-}
+import "../lib/main.tsp";
+import "./rbac/rbac-extensions.tsp";
+
+using Kessel;
+
+namespace MyApp;
+
+alias widgetView = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
 ```
 
 Parameters:
@@ -40,31 +44,28 @@ Parameters:
 - `"read"` — verb: `"read"` | `"write"` | `"create"` | `"delete"`
 - `"myapp_widget_view"` — v2 permission name (snake_case)
 
-Multiple permissions on the same model:
+Multiple permissions for the same service:
 
 ```typespec
-@v1Permission("myapp", "widgets", "read", "myapp_widget_view")
-@v1Permission("myapp", "widgets", "write", "myapp_widget_update")
-model Widget {
-  workspace: WorkspaceRef;
-}
+alias widgetView = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
+alias widgetUpdate = RBAC.V1WorkspacePermission<"myapp", "widgets", "write", "myapp_widget_update">;
 ```
 
 ### 2. No manual relation wiring needed
 
-The emitter auto-wires permission relations based on the verb. You do **not** need to write:
+The RBAC provider auto-wires permission relations based on the verb. You do **not** need to write:
 
 ```typespec
 view: Permission<SubRef<"workspace", "myapp_widget_view">>;
 ```
 
-This is injected automatically.
+This is injected automatically by the provider.
 
 ### 3. Verify
 
 ```bash
-npm run build && npx tsp compile schema/main.tsp   # check SpiceDB output
-npx vitest run                                       # run tests
+make build && npx tsp compile schema/main.tsp   # check SpiceDB output
+npx vitest run                                    # run tests
 ```
 
 ## Naming Conventions
@@ -80,8 +81,9 @@ npx vitest run                                       # run tests
 
 **Read + write pair:**
 ```typespec
-@v1Permission("myapp", "widgets", "read", "myapp_widget_view")
-@v1Permission("myapp", "widgets", "write", "myapp_widget_update")
+alias widgetView = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
+alias widgetUpdate = RBAC.V1WorkspacePermission<"myapp", "widgets", "write", "myapp_widget_update">;
+
 model Widget {
   workspace: WorkspaceRef;
 }
@@ -89,6 +91,6 @@ model Widget {
 
 **Permissions-only service** (no resource types, just permissions on workspace):
 ```typespec
-@v1Permission("remediations", "remediations", "read", "remediations_remediation_view")
-model RemediationsPermissions {}
+alias remView = RBAC.V1WorkspacePermission<"remediations", "remediations", "read", "remediations_remediation_view">;
+alias remUpdate = RBAC.V1WorkspacePermission<"remediations", "remediations", "write", "remediations_remediation_update">;
 ```
