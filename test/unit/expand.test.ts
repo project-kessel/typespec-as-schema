@@ -6,9 +6,18 @@ import {
   findResource,
   slotName,
 } from "../../src/lib.js";
-import { expandV1Permissions, wireDeleteScaffold, type V1Extension } from "../../src/expand-v1.js";
 import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
 import { ResourceGraph } from "../../src/resource-graph.js";
+import rbacExtension from "../../schema/rbac/rbac-extension.js";
+import rbacCascade from "../../schema/rbac/rbac-cascade-extension.js";
+
+type V1Extension = Record<string, string>;
+function expandV1Permissions(graph: ResourceGraph, perms: V1Extension[]): void {
+  rbacExtension.expand(graph, perms);
+}
+function wireDeleteScaffold(graph: ResourceGraph): void {
+  rbacCascade.beforeCascadeDelete!(graph);
+}
 
 function makeBaseRbacResources(): ResourceDef[] {
   return [

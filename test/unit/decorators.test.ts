@@ -82,40 +82,6 @@ describe("@annotation decorator (legacy)", () => {
   }, 30_000);
 });
 
-describe("@v1Permission decorator", () => {
-  it("stores permission data in state map", async () => {
-    const program = await compileInlineWithLib(`
-      using Kessel;
-      namespace TestApp;
-      @v1Permission("myapp", "widget", "read", "myapp_widget_view")
-      model Widget {}
-    `);
-
-    const stateMap = program.stateMap(StateKeys.v1Permission);
-    expect(stateMap.size).toBe(1);
-    const entries = [...stateMap.values()];
-    const perms = entries[0] as Array<{ application: string; v2Perm: string }>;
-    expect(perms).toHaveLength(1);
-    expect(perms[0].application).toBe("myapp");
-    expect(perms[0].v2Perm).toBe("myapp_widget_view");
-  }, 30_000);
-
-  it("supports multiple decorators on one model", async () => {
-    const program = await compileInlineWithLib(`
-      using Kessel;
-      namespace TestApp;
-      @v1Permission("myapp", "widget", "read", "myapp_widget_view")
-      @v1Permission("myapp", "widget", "write", "myapp_widget_update")
-      model Widget {}
-    `);
-
-    const stateMap = program.stateMap(StateKeys.v1Permission);
-    const entries = [...stateMap.values()];
-    const perms = entries[0] as Array<{ v2Perm: string }>;
-    expect(perms).toHaveLength(2);
-  }, 30_000);
-});
-
 describe("@cascadeDelete decorator", () => {
   it("stores cascade data in state map with inferred app/resource", async () => {
     const program = await compileInlineWithLib(`

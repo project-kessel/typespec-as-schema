@@ -10,13 +10,16 @@ beforeAll(async () => {
 
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
-describe("V1 permission discovery", () => {
-  it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
-    expect(pipeline.permissions).toHaveLength(4);
+describe("Extension discovery", () => {
+  it("discovers V1WorkspacePermission instances via template scanning", () => {
+    const rbac = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission");
+    expect(rbac).toBeDefined();
+    expect(rbac!.instances).toHaveLength(4);
   });
 
-  it("extracts correct v2Perm from each instance", () => {
-    const perms = pipeline.permissions.map((e) => e.v2Perm).sort();
+  it("extracts correct v2Perm from each V1 instance", () => {
+    const rbac = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission")!;
+    const perms = rbac.instances.map((e) => e.v2Perm).sort();
     expect(perms).toEqual([
       "inventory_host_update",
       "inventory_host_view",
@@ -26,9 +29,16 @@ describe("V1 permission discovery", () => {
   });
 
   it("extracts correct application names", () => {
-    const apps = new Set(pipeline.permissions.map((e) => e.application));
+    const rbac = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission")!;
+    const apps = new Set(rbac.instances.map((e) => e.application));
     expect(apps.has("inventory")).toBe(true);
     expect(apps.has("remediations")).toBe(true);
+  });
+
+  it("loads extension modules from schema/**/*-extension.ts", () => {
+    const names = pipeline.extensions.map((e) => e.templateName).sort();
+    expect(names).toContain("V1WorkspacePermission");
+    expect(names).toContain("ExposeHostPermission");
   });
 });
 
@@ -81,6 +91,38 @@ describe("Expansion: Unified JSON Schema", () => {
     const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
     expect(hostSchema.properties["workspace_id"]).toBeDefined();
     expect(hostSchema.required).toContain("workspace_id");
+  });
+
+  it("wraps optional data fields in oneOf with null", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.properties["subscription_manager_id"]).toEqual({
+      oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+    });
+    expect(hostSchema.properties["insights_id"]).toEqual({
+      oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+    });
+    expect(hostSchema.properties["ansible_host"]).toEqual({
+      oneOf: [{ type: "string", maxLength: 255 }, { type: "null" }],
+    });
+  });
+
+  it("includes union data fields as oneOf with null appended", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    const satProp = hostSchema.properties["satellite_id"];
+    expect(satProp).toBeDefined();
+    expect("oneOf" in satProp).toBe(true);
+    if ("oneOf" in satProp) {
+      expect(satProp.oneOf).toHaveLength(3);
+      expect(satProp.oneOf[satProp.oneOf.length - 1]).toEqual({ type: "null" });
+    }
+  });
+
+  it("data fields are optional (not in required)", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.required).not.toContain("subscription_manager_id");
+    expect(hostSchema.required).not.toContain("ansible_host");
+    expect(hostSchema.required).not.toContain("satellite_id");
+    expect(hostSchema.required).not.toContain("insights_id");
   });
 });
 

@@ -1,6 +1,5 @@
-// Golden reference SpiceDB schema for benchmark tests.
-// Generated from schema/main.tsp via the TypeSpec emitter pipeline.
-// This file must exactly match the emitter output (used for structural comparison).
+// Generated SpiceDB/Zed Schema from TypeSpec type graph
+// Produced by walking the compiled TypeSpec program.
 
 definition rbac/principal {
 }

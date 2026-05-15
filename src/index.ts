@@ -9,7 +9,6 @@ export {
   $kesselExtension,
   $cascadePolicy,
   $annotation,
-  $v1Permission,
   $cascadeDelete,
   $resourceAnnotation,
 } from "./decorators.js";

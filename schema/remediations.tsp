@@ -3,11 +3,11 @@
 // defining any resource types.
 
 import "../lib/main.tsp";
+import "./rbac/rbac-extensions.tsp";
 
 using Kessel;
 
 namespace Remediations;
 
-@v1Permission("remediations", "remediations", "read", "remediations_remediation_view")
-@v1Permission("remediations", "remediations", "write", "remediations_remediation_update")
-model RemediationsPermissions {}
+alias remediationViewPermission = Kessel.V1WorkspacePermission<"remediations", "remediations", "read", "remediations_remediation_view">;
+alias remediationUpdatePermission = Kessel.V1WorkspacePermission<"remediations", "remediations", "write", "remediations_remediation_update">;

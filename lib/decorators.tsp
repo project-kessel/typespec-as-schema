@@ -30,24 +30,6 @@ extern dec cascadePolicy(target: Model);
 extern dec annotation(target: Model);
 
 /**
- * Registers a V1 workspace permission on a resource model.
- * The emitter discovers these via compiler state and expands them
- * through the RBAC provider.
- *
- * @param app     Lowercase application identifier (e.g. "inventory").
- * @param resource Lowercase resource identifier (e.g. "hosts").
- * @param verb    The verb this permission covers.
- * @param v2Perm  Snake_case v2 permission name (e.g. "inventory_host_view").
- */
-extern dec v1Permission(
-  target: Model,
-  app: valueof string,
-  resource: valueof string,
-  verb: valueof string,
-  v2Perm: valueof string
-);
-
-/**
  * Cascade-delete policy: when the parent resource is deleted,
  * authorization cascades to this child resource.
  * Application and resource are inferred from the model's namespace and name.

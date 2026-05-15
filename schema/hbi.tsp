@@ -2,29 +2,44 @@
 // Defines the host resource type with data fields, validation rules,
 // and permissions derived from RBAC workspace permission extensions.
 
-import "@typespec/json-schema";
 import "../lib/main.tsp";
+import "./rbac/rbac-extensions.tsp";
 
-using JsonSchema;
 using Kessel;
 
 namespace Inventory;
 
-// ─── Host Data Schema (→ JSONSchema) ─────────────────────────────────
+// ─── Extension Applications ──────────────────────────────────────────
+
+alias viewPermission = Kessel.V1WorkspacePermission<"inventory", "hosts", "read", "inventory_host_view">;
+alias updatePermission = Kessel.V1WorkspacePermission<"inventory", "hosts", "write", "inventory_host_update">;
+
+/** UUID string format */
+@format("uuid")
+scalar UuidString extends string;
 
 /** 10-digit numeric satellite ID format */
 @pattern("^\\d{10}$")
 scalar SatelliteNumericId extends string;
 
-/** Data fields for a host resource, with validation rules */
-@jsonSchema
-model HostData {
+// ─── Host Resource Type ──────────────────────────────────────────────
+// Relations, data fields, and permissions are all defined at the same
+// level. The emitter extracts data fields for JSON Schema and filters
+// out Kessel types automatically.
+
+@cascadeDelete("workspace")
+@resourceAnnotation("feature_flag", "staleness_v2")
+@resourceAnnotation("retention_days", "90")
+model Host {
+  /** Every host belongs to exactly one RBAC workspace */
+  workspace: WorkspaceRef;
+
   /** UUID of the subscription manager */
   @format("uuid")
   subscription_manager_id?: string;
 
   /** Can be UUID or 10-digit numeric string */
-  satellite_id?: string | SatelliteNumericId;
+  satellite_id?: UuidString | SatelliteNumericId;
 
   /** UUID of the insights registration */
   @format("uuid")
@@ -33,19 +48,4 @@ model HostData {
   /** Ansible hostname, max 255 characters */
   @maxLength(255)
   ansible_host?: string;
-}
-
-// ─── Host Resource Type ──────────────────────────────────────────────
-
-@v1Permission("inventory", "hosts", "read", "inventory_host_view")
-@v1Permission("inventory", "hosts", "write", "inventory_host_update")
-@cascadeDelete("workspace")
-@resourceAnnotation("feature_flag", "staleness_v2")
-@resourceAnnotation("retention_days", "90")
-model Host {
-  /** Every host belongs to exactly one RBAC workspace */
-  workspace: WorkspaceRef;
-
-  /** Host data fields with validation */
-  data: HostData;
 }

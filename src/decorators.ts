@@ -21,20 +21,6 @@ export function $annotation(context: DecoratorContext, target: Model) {
   context.program.stateSet(StateKeys.annotation).add(target);
 }
 
-export function $v1Permission(
-  context: DecoratorContext,
-  target: Model,
-  app: string,
-  resource: string,
-  verb: string,
-  v2Perm: string,
-) {
-  const map = context.program.stateMap(StateKeys.v1Permission);
-  const existing = (map.get(target) as Array<{ application: string; resource: string; verb: string; v2Perm: string }>) ?? [];
-  existing.push({ application: app, resource, verb, v2Perm });
-  map.set(target, existing);
-}
-
 export function $cascadeDelete(
   context: DecoratorContext,
   target: Model,
@@ -67,7 +53,6 @@ setTypeSpecNamespace(
   $kesselExtension,
   $cascadePolicy,
   $annotation,
-  $v1Permission,
   $cascadeDelete,
   $resourceAnnotation,
 );

@@ -43,7 +43,6 @@ export const StateKeys = {
   kesselExtension: $lib.createStateSymbol("kesselExtension"),
   cascadePolicy: $lib.createStateSymbol("cascadePolicy"),
   annotation: $lib.createStateSymbol("annotation"),
-  v1Permission: $lib.createStateSymbol("v1Permission"),
 };
 
 // ─── Public API re-exports ───────────────────────────────────────────
@@ -52,6 +51,9 @@ export type {
   RelationDef,
   RelationBody,
   ResourceDef,
+  DataFieldDef,
+  DataFieldSchema,
+  JsonSchemaProperty,
   UnifiedJsonSchema,
   CascadeDeleteEntry,
   AnnotationEntry,
@@ -91,18 +93,7 @@ export {
   type TemplateDiscoveryResult,
 } from "./discover-templates.js";
 
-export {
-  expandV1Permissions,
-  wireDeleteScaffold,
-  wirePermissionRelations,
-  discoverV1Permissions,
-  buildPermissionsByApp,
-  verbToRelationName,
-  isKesselVerb,
-  VALID_VERBS,
-  type V1Extension,
-  type PermissionsByApp,
-} from "./expand-v1.js";
+export { loadExtensionModules, type ExtensionModule } from "./extension-loader.js";
 
 export {
   type MetadataContribution,

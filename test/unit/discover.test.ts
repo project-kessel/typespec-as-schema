@@ -28,66 +28,6 @@ async function compileInlineWithLib(tspSource: string): Promise<Program> {
   return program;
 }
 
-describe("@v1Permission decorator discovery", () => {
-  it("discovers permissions from @v1Permission decorator", async () => {
-    const program = await compileInlineWithLib(`
-      using Kessel;
-      namespace TestApp;
-      @v1Permission("myapp", "widget", "read", "myapp_widget_view")
-      model Widget {}
-    `);
-
-    const stateMap = program.stateMap(StateKeys.v1Permission);
-    const allPerms: Array<{ application: string; resource: string; verb: string; v2Perm: string }> = [];
-    for (const [, entries] of stateMap) {
-      allPerms.push(...(entries as typeof allPerms));
-    }
-    expect(allPerms).toHaveLength(1);
-    expect(allPerms[0]).toEqual({
-      application: "myapp",
-      resource: "widget",
-      verb: "read",
-      v2Perm: "myapp_widget_view",
-    });
-  }, 30_000);
-
-  it("supports multiple @v1Permission decorators on one model", async () => {
-    const program = await compileInlineWithLib(`
-      using Kessel;
-      namespace TestApp;
-      @v1Permission("myapp", "widget", "read", "myapp_widget_view")
-      @v1Permission("myapp", "widget", "write", "myapp_widget_update")
-      model Widget {}
-    `);
-
-    const stateMap = program.stateMap(StateKeys.v1Permission);
-    const allPerms: Array<{ application: string; resource: string; verb: string; v2Perm: string }> = [];
-    for (const [, entries] of stateMap) {
-      allPerms.push(...(entries as typeof allPerms));
-    }
-    expect(allPerms).toHaveLength(2);
-    expect(allPerms.map((p) => p.v2Perm).sort()).toEqual(["myapp_widget_update", "myapp_widget_view"]);
-  }, 30_000);
-
-  it("discovers permissions across multiple models", async () => {
-    const program = await compileInlineWithLib(`
-      using Kessel;
-      namespace TestApp;
-      @v1Permission("myapp", "widget", "read", "myapp_widget_view")
-      model Widget {}
-      @v1Permission("myapp", "gadget", "read", "myapp_gadget_view")
-      model Gadget {}
-    `);
-
-    const stateMap = program.stateMap(StateKeys.v1Permission);
-    const allPerms: Array<{ application: string; resource: string; verb: string; v2Perm: string }> = [];
-    for (const [, entries] of stateMap) {
-      allPerms.push(...(entries as typeof allPerms));
-    }
-    expect(allPerms).toHaveLength(2);
-  }, 30_000);
-});
-
 describe("discoverResources", () => {
   it("skips models in the Kessel namespace", async () => {
     const program = await compileInlineWithLib(`

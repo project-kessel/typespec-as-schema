@@ -41,7 +41,9 @@ describe("G1: Authorization Completeness", () => {
 describe("G2: Data Field Support", () => {
   it("discovers at least one resource and extension", () => {
     expect(pipeline.resources.length).toBeGreaterThanOrEqual(1);
-    expect(pipeline.permissions.length).toBeGreaterThanOrEqual(1);
+    const v1 = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission");
+    expect(v1).toBeDefined();
+    expect(v1!.instances.length).toBeGreaterThanOrEqual(1);
   });
 
   it("HBI host resource is discovered", () => {
@@ -62,8 +64,9 @@ describe("G4: Cooperative Extensions", () => {
   });
 
   it("extensions are invoked from HBI/Remediations, not inlined in RBAC", () => {
-    expect(pipeline.permissions.some((e) => e.application === "inventory")).toBe(true);
-    expect(pipeline.permissions.some((e) => e.application === "remediations")).toBe(true);
+    const v1 = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission")!;
+    expect(v1.instances.some((e) => e.application === "inventory")).toBe(true);
+    expect(v1.instances.some((e) => e.application === "remediations")).toBe(true);
   });
 
   it("no duplicate permission names on role for same extension", () => {
@@ -123,11 +126,12 @@ describe("M1: Feature Coverage", () => {
   });
 
   it("V1WorkspacePermission extension mechanism discovers extensions from aliases", () => {
-    expect(pipeline.permissions.length).toBeGreaterThanOrEqual(4);
-    expect(pipeline.permissions.some((e) => e.v2Perm === "inventory_host_view")).toBe(true);
-    expect(pipeline.permissions.some((e) => e.v2Perm === "inventory_host_update")).toBe(true);
-    expect(pipeline.permissions.some((e) => e.v2Perm === "remediations_remediation_view")).toBe(true);
-    expect(pipeline.permissions.some((e) => e.v2Perm === "remediations_remediation_update")).toBe(true);
+    const v1 = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission")!;
+    expect(v1.instances.length).toBeGreaterThanOrEqual(4);
+    expect(v1.instances.some((e) => e.v2Perm === "inventory_host_view")).toBe(true);
+    expect(v1.instances.some((e) => e.v2Perm === "inventory_host_update")).toBe(true);
+    expect(v1.instances.some((e) => e.v2Perm === "remediations_remediation_view")).toBe(true);
+    expect(v1.instances.some((e) => e.v2Perm === "remediations_remediation_update")).toBe(true);
   });
 
   it("any_any_any wildcard naming", () => {
