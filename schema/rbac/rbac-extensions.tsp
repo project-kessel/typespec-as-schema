@@ -9,7 +9,9 @@
 
 import "../../lib/kessel.tsp";
 
-namespace Kessel;
+using Kessel;
+
+namespace RBAC;
 
 /** Allowed verbs for permission registration. */
 alias KesselVerb = "read" | "write" | "create" | "delete";

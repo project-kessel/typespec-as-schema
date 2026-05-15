@@ -9,7 +9,7 @@ import { slotName, StateKeys } from "../../src/lib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const libDir = path.resolve(__dirname, "../../lib");
-const distDir = path.resolve(__dirname, "../../dist/index.js");
+const distDir = path.resolve(__dirname, "../../dist/src/index.js");
 
 async function compileInlineWithLib(tspSource: string): Promise<Program> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "discover-test-"));

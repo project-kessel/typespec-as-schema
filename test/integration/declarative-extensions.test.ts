@@ -10,16 +10,20 @@ beforeAll(async () => {
 
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
-describe("Extension discovery", () => {
-  it("discovers V1WorkspacePermission instances via template scanning", () => {
-    const rbac = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission");
-    expect(rbac).toBeDefined();
-    expect(rbac!.instances).toHaveLength(4);
+describe("Provider discovery", () => {
+  it("runs RBAC and HBI providers", () => {
+    const ids = pipeline.providerResults.map((pr) => pr.providerId).sort();
+    expect(ids).toEqual(["hbi", "rbac"]);
+  });
+
+  it("discovers 4 V1WorkspacePermission instances", () => {
+    const rbac = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    expect(rbac.discovered).toHaveLength(4);
   });
 
   it("extracts correct v2Perm from each V1 instance", () => {
-    const rbac = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission")!;
-    const perms = rbac.instances.map((e) => e.v2Perm).sort();
+    const rbac = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    const perms = rbac.discovered.map((e) => e.params.v2Perm).sort();
     expect(perms).toEqual([
       "inventory_host_update",
       "inventory_host_view",
@@ -29,16 +33,10 @@ describe("Extension discovery", () => {
   });
 
   it("extracts correct application names", () => {
-    const rbac = pipeline.extensions.find((e) => e.templateName === "V1WorkspacePermission")!;
-    const apps = new Set(rbac.instances.map((e) => e.application));
+    const rbac = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    const apps = new Set(rbac.discovered.map((e) => e.params.application));
     expect(apps.has("inventory")).toBe(true);
     expect(apps.has("remediations")).toBe(true);
-  });
-
-  it("loads extension modules from schema/**/*-extension.ts", () => {
-    const names = pipeline.extensions.map((e) => e.templateName).sort();
-    expect(names).toContain("V1WorkspacePermission");
-    expect(names).toContain("ExposeHostPermission");
   });
 });
 

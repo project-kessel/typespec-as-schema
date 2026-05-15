@@ -45,6 +45,7 @@ export const StateKeys = {
   annotation: $lib.createStateSymbol("annotation"),
 };
 
+
 // ─── Public API re-exports ───────────────────────────────────────────
 
 export type {
@@ -93,7 +94,8 @@ export {
   type TemplateDiscoveryResult,
 } from "./discover-templates.js";
 
-export { loadExtensionModules, type ExtensionModule } from "./extension-loader.js";
+export { defineProvider, validParams, type ProviderConfig } from "./define-provider.js";
+export type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "./provider.js";
 
 export {
   type MetadataContribution,

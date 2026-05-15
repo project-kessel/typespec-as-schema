@@ -9,5 +9,5 @@ using Kessel;
 
 namespace Remediations;
 
-alias remediationViewPermission = Kessel.V1WorkspacePermission<"remediations", "remediations", "read", "remediations_remediation_view">;
-alias remediationUpdatePermission = Kessel.V1WorkspacePermission<"remediations", "remediations", "write", "remediations_remediation_update">;
+alias remediationViewPermission = RBAC.V1WorkspacePermission<"remediations", "remediations", "read", "remediations_remediation_view">;
+alias remediationUpdatePermission = RBAC.V1WorkspacePermission<"remediations", "remediations", "write", "remediations_remediation_update">;

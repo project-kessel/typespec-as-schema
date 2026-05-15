@@ -1,5 +1,5 @@
 imports:
-  - "../dist/index.js"
+  - "../dist/src/index.js"
 emit:
   - "@typespec/json-schema"
   - "typespec-as-schema"

@@ -7,16 +7,13 @@ import {
   slotName,
 } from "../../src/lib.js";
 import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
-import { ResourceGraph } from "../../src/resource-graph.js";
-import rbacExtension from "../../schema/rbac/rbac-extension.js";
-import rbacCascade from "../../schema/rbac/rbac-cascade-extension.js";
+import { rbacProvider } from "../../schema/rbac/rbac-provider.js";
 
-type V1Extension = Record<string, string>;
-function expandV1Permissions(graph: ResourceGraph, perms: V1Extension[]): void {
-  rbacExtension.expand(graph, perms);
+function expandWithProvider(resources: ResourceDef[], perms: Record<string, string>[]): { resources: ResourceDef[]; warnings: string[] } {
+  return rbacProvider.expand(resources, perms.map((p) => ({ kind: "V1WorkspacePermission", params: p })));
 }
-function wireDeleteScaffold(graph: ResourceGraph): void {
-  rbacCascade.beforeCascadeDelete!(graph);
+function wireDeleteScaffold(resources: ResourceDef[]): ResourceDef[] {
+  return rbacProvider.onBeforeCascadeDelete!(resources);
 }
 
 function makeBaseRbacResources(): ResourceDef[] {
@@ -49,15 +46,11 @@ function makeBaseRbacResources(): ResourceDef[] {
 }
 
 function expandWithGraph(resources: ResourceDef[], permissions: V1Extension[]): { resources: ResourceDef[]; warnings: string[] } {
-  const graph = new ResourceGraph(resources);
-  expandV1Permissions(graph, permissions);
-  return { resources: graph.toResources(), warnings: graph.warnings };
+  return expandWithProvider(resources, permissions);
 }
 
 function wireWithGraph(resources: ResourceDef[]): ResourceDef[] {
-  const graph = new ResourceGraph(resources);
-  wireDeleteScaffold(graph);
-  return graph.toResources();
+  return wireDeleteScaffold(resources);
 }
 
 const inventoryViewExt: V1Extension = {

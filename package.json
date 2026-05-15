@@ -2,12 +2,12 @@
   "name": "typespec-as-schema",
   "version": "1.0.0",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "tspMain": "lib/kessel.tsp",
   "exports": {
     ".": {
       "typespec": "./lib/kessel.tsp",
-      "default": "./dist/index.js"
+      "default": "./dist/src/index.js"
     }
   },
   "scripts": {

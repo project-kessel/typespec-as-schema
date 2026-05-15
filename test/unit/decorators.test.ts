@@ -8,7 +8,7 @@ import { StateKeys } from "../../src/lib.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const libDir = path.resolve(__dirname, "../../lib");
-const distDir = path.resolve(__dirname, "../../dist/index.js");
+const distDir = path.resolve(__dirname, "../../dist/src/index.js");
 const rbacExtDir = path.resolve(__dirname, "../../schema/rbac");
 
 async function compileInlineWithLib(tspSource: string): Promise<Program> {

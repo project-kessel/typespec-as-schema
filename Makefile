@@ -18,7 +18,6 @@ all: build compile
 
 build:
 	npx tsc -p tsconfig.build.json
-	npx tsc -p schema/tsconfig.json
 
 compile: build
 	$(TSP) compile $(MAIN_TSP)

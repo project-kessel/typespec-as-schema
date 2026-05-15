@@ -2,17 +2,15 @@
 // Defines the host resource type with data fields, validation rules,
 // and permissions derived from RBAC workspace permission extensions.
 
-import "../lib/main.tsp";
-import "./rbac/rbac-extensions.tsp";
+import "../../lib/main.tsp";
+import "../rbac/rbac-extensions.tsp";
 
 using Kessel;
 
 namespace Inventory;
 
-// ─── Extension Applications ──────────────────────────────────────────
-
-alias viewPermission = Kessel.V1WorkspacePermission<"inventory", "hosts", "read", "inventory_host_view">;
-alias updatePermission = Kessel.V1WorkspacePermission<"inventory", "hosts", "write", "inventory_host_update">;
+alias viewPermission = RBAC.V1WorkspacePermission<"inventory", "hosts", "read", "inventory_host_view">;
+alias updatePermission = RBAC.V1WorkspacePermission<"inventory", "hosts", "write", "inventory_host_update">;
 
 /** UUID string format */
 @format("uuid")

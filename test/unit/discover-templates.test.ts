@@ -20,13 +20,13 @@ async function compileInline(tspSource: string): Promise<Program> {
 const V1_TEMPLATE: TemplateDef = {
   templateName: "V1WorkspacePermission",
   paramNames: ["application", "resource", "verb", "v2Perm"],
-  namespace: "Kessel",
+  namespace: "RBAC",
 };
 
 describe("discoverTemplateInstances", () => {
   it("discovers alias-based template instances", async () => {
     const program = await compileInline(`
-      alias MyPerm = Kessel.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
+      alias MyPerm = RBAC.V1WorkspacePermission<"myapp", "widget", "read", "myapp_widget_view">;
     `);
 
     const result = discoverTemplateInstances(program, V1_TEMPLATE);
@@ -41,9 +41,9 @@ describe("discoverTemplateInstances", () => {
 
   it("discovers multiple aliases and deduplicates", async () => {
     const program = await compileInline(`
-      alias A = Kessel.V1WorkspacePermission<"app", "res", "read", "app_res_view">;
-      alias B = Kessel.V1WorkspacePermission<"app", "res", "write", "app_res_update">;
-      alias Dup = Kessel.V1WorkspacePermission<"app", "res", "read", "app_res_view">;
+      alias A = RBAC.V1WorkspacePermission<"app", "res", "read", "app_res_view">;
+      alias B = RBAC.V1WorkspacePermission<"app", "res", "write", "app_res_update">;
+      alias Dup = RBAC.V1WorkspacePermission<"app", "res", "read", "app_res_view">;
     `);
 
     const result = discoverTemplateInstances(program, V1_TEMPLATE);
@@ -69,7 +69,7 @@ describe("discoverTemplateInstances", () => {
 
   it("tracks alias resolution stats", async () => {
     const program = await compileInline(`
-      alias Perm = Kessel.V1WorkspacePermission<"app", "res", "read", "app_res_view">;
+      alias Perm = RBAC.V1WorkspacePermission<"app", "res", "read", "app_res_view">;
     `);
 
     const result = discoverTemplateInstances(program, V1_TEMPLATE);

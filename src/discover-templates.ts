@@ -116,10 +116,12 @@ export function discoverTemplateInstances(
     results.push(params);
   }
 
+  const templateNsFQN = getNamespaceFQN(template.namespace);
   navigateProgram(program, {
     model(model: Model) {
       if (model.templateNode && !isTemplateInstance(model)) return;
-      if (getNamespaceFQN(model.namespace).endsWith("Kessel")) return;
+      const modelNs = getNamespaceFQN(model.namespace);
+      if (modelNs === templateNsFQN || modelNs.endsWith("Kessel")) return;
       addUnique(model);
     },
   });
