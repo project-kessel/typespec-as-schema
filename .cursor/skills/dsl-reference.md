@@ -70,19 +70,30 @@ permission isAdmin = t_isAdmin
 
 ## Extension Templates
 
-Extensions are TypeSpec model templates in provider-owned namespaces. Service authors use them via `alias` declarations.
+Extensions are TypeSpec model templates in provider-owned namespaces. Service authors use them via `@decorator` on models (preferred) or `alias` declarations. Both forms are auto-discovered and produce identical expansion results.
 
 ### RBAC: V1WorkspacePermission (`schema/rbac/rbac-extensions.tsp`)
 
 Namespace: `RBAC`
 
+**Decorator style** (preferred when a model exists -- requires `using RBAC;`):
+
+```typespec
+@v1Permission("read", "widgets", "myapp", "myapp_widget_view")
+model Widget { ... }
+```
+
+Decorator parameters: `(verb, resource, application, v2PermissionName)`
+
+**Alias style** (alternative, works without a model):
+
 ```typespec
 alias myPerm = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
 ```
 
-Parameters: `(application, resource, verb, v2PermissionName)`
+Template parameters: `<application, resource, verb, v2PermissionName>`
 
-The RBAC provider discovers these aliases and expands 7 mutations per instance across role / role_binding / workspace. It also auto-wires permission relations on the resource:
+The RBAC provider discovers both forms and expands 7 mutations per instance across role / role_binding / workspace. It also auto-wires permission relations on the resource:
 
 | Verb | Auto-wired relation |
 |------|---------------------|
@@ -95,17 +106,30 @@ The RBAC provider discovers these aliases and expands 7 mutations per instance a
 
 Namespace: `HBI`
 
+**Decorator style** (requires `using HBI;`):
+
+```typespec
+@exposeHostPermission("ros_read_analysis", "ros_read_analysis")
+model Host { ... }
+```
+
+Decorator parameters: `(v2Perm, hostPerm)`
+
+**Alias style:**
+
 ```typespec
 alias rosHost = HBI.ExposeHostPermission<"ros_read_analysis", "ros_read_analysis">;
 ```
 
-Parameters: `(v2Perm, hostPerm)`
+Template parameters: `(v2Perm, hostPerm)`
 
 The HBI provider adds a computed permission on `inventory/host` gated on `view & workspace->{v2Perm}`.
 
-## Platform Decorators
+## Decorators
 
-These are platform-owned, applied directly on resource models:
+### Platform Decorators
+
+These are platform-owned (`using Kessel;`), applied directly on resource models:
 
 ### @cascadeDelete
 
@@ -136,6 +160,44 @@ model Template {
 Parameters: `(key, value)` — both strings.
 
 App and resource names are inferred from the namespace and model name.
+
+### Provider Decorators
+
+These are defined by extension providers and wired into the package entry via build-time codegen (`scripts/gen-decorator-wiring.mjs`). Use the provider namespace or `using RBAC;` / `using HBI;`.
+
+### @v1Permission (RBAC)
+
+Registers a V1 workspace permission on a resource model. Equivalent to a `RBAC.V1WorkspacePermission<...>` alias but co-located on the model.
+
+```typespec
+using RBAC;
+
+@v1Permission("read", "widgets", "myapp", "myapp_widget_view")
+model Widget {
+  workspace: WorkspaceRef;
+}
+```
+
+Parameters: `(verb, resource, application, v2Perm)`
+- `verb` — `"read"` | `"write"` | `"create"` | `"delete"`
+- `resource` — lowercase plural resource name
+- `application` — lowercase application identifier
+- `v2Perm` — snake_case v2 permission name
+
+### @exposeHostPermission (HBI)
+
+Exposes a workspace-level permission on the host resource. Equivalent to `HBI.ExposeHostPermission<...>`.
+
+```typespec
+using HBI;
+
+@exposeHostPermission("inventory_host_view", "view_vulnerability")
+model Host { ... }
+```
+
+Parameters: `(v2Perm, hostPerm)`
+- `v2Perm` — the workspace permission name to pass through
+- `hostPerm` — the permission name to expose on the host
 
 ## Data Fields
 

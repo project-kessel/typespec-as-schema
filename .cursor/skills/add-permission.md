@@ -1,10 +1,10 @@
 # Add a V1 Workspace Permission
 
-Guide for registering a new permission via a `V1WorkspacePermission` template alias.
+Guide for registering a new permission via the `@v1Permission` decorator or `V1WorkspacePermission` template alias.
 
 ## What This Does
 
-Each `V1WorkspacePermission` alias triggers **exactly 7 mutations** on RBAC types:
+Each permission registration triggers **exactly 7 mutations** on RBAC types:
 
 1. `rbac/role` — 4 bool relations for the hierarchy (`app_any_any`, `app_res_any`, `app_any_verb`, `app_res_verb`)
 2. `rbac/role` — 1 computed permission (union of the 4 hierarchy levels + `any_any_any`)
@@ -23,9 +23,35 @@ Additionally, the RBAC provider **auto-wires** a permission relation on the reso
 
 ## Steps
 
-### 1. Add a template alias
+### Option A: Decorator style (preferred when a model exists)
 
-In your service `.tsp` file, import the RBAC extensions and create an alias:
+Use `@v1Permission` directly on the resource model. Requires `using RBAC;`:
+
+```typespec
+import "../lib/main.tsp";
+import "./rbac/rbac-extensions.tsp";
+
+using Kessel;
+using RBAC;
+
+namespace MyApp;
+
+@v1Permission("read", "widgets", "myapp", "myapp_widget_view")
+@v1Permission("write", "widgets", "myapp", "myapp_widget_update")
+model Widget {
+  workspace: WorkspaceRef;
+}
+```
+
+Parameters (in order):
+- `"read"` — verb: `"read"` | `"write"` | `"create"` | `"delete"`
+- `"widgets"` — resource (plural, lowercase)
+- `"myapp"` — application (lowercase)
+- `"myapp_widget_view"` — v2 permission name (snake_case)
+
+### Option B: Template alias style (for permissions-only services)
+
+Use aliases when there is no model to attach decorators to:
 
 ```typespec
 import "../lib/main.tsp";
@@ -36,20 +62,10 @@ using Kessel;
 namespace MyApp;
 
 alias widgetView = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
-```
-
-Parameters:
-- `"myapp"` — application (lowercase)
-- `"widgets"` — resource (plural, lowercase)
-- `"read"` — verb: `"read"` | `"write"` | `"create"` | `"delete"`
-- `"myapp_widget_view"` — v2 permission name (snake_case)
-
-Multiple permissions for the same service:
-
-```typespec
-alias widgetView = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
 alias widgetUpdate = RBAC.V1WorkspacePermission<"myapp", "widgets", "write", "myapp_widget_update">;
 ```
+
+Template alias parameters (in order): `<application, resource, verb, v2Perm>`.
 
 ### 2. No manual relation wiring needed
 
@@ -79,7 +95,18 @@ npx vitest run                                    # run tests
 
 ## Common Patterns
 
-**Read + write pair:**
+**Read + write pair (decorator style):**
+
+```typespec
+@v1Permission("read", "widgets", "myapp", "myapp_widget_view")
+@v1Permission("write", "widgets", "myapp", "myapp_widget_update")
+model Widget {
+  workspace: WorkspaceRef;
+}
+```
+
+**Read + write pair (alias style):**
+
 ```typespec
 alias widgetView = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
 alias widgetUpdate = RBAC.V1WorkspacePermission<"myapp", "widgets", "write", "myapp_widget_update">;
@@ -89,7 +116,8 @@ model Widget {
 }
 ```
 
-**Permissions-only service** (no resource types, just permissions on workspace):
+**Permissions-only service** (no resource types, must use aliases):
+
 ```typespec
 alias remView = RBAC.V1WorkspacePermission<"remediations", "remediations", "read", "remediations_remediation_view">;
 alias remUpdate = RBAC.V1WorkspacePermission<"remediations", "remediations", "write", "remediations_remediation_update">;
