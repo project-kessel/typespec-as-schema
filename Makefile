@@ -17,6 +17,7 @@ EMIT_OPT  = --option typespec-as-schema.output-format
 all: build compile
 
 build:
+	node scripts/gen-decorator-wiring.mjs
 	npx tsc -p tsconfig.build.json
 
 compile: build

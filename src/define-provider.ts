@@ -1,8 +1,8 @@
 // defineProvider — reduces extension provider boilerplate.
 //
 // Provider authors supply only their expansion logic and metadata;
-// discovery is auto-generated from template definitions using
-// the platform's discoverTemplateInstances utility.
+// discovery is auto-generated from template definitions and/or
+// decorator state maps using the platform's utilities.
 
 import type { Program } from "@typespec/compiler";
 import type { ResourceDef } from "./types.js";
@@ -10,9 +10,15 @@ import type { TemplateDef } from "./discover-templates.js";
 import type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "./provider.js";
 import { discoverTemplateInstances } from "./discover-templates.js";
 
+export interface DecoratorSource {
+  stateKey: symbol;
+  kind: string;
+}
+
 export interface ProviderConfig {
   id: string;
   templates: TemplateDef[];
+  decorators?: DecoratorSource[];
   expand(resources: ResourceDef[], discovered: DiscoveredExtension[]): ProviderExpansionResult;
   onBeforeCascadeDelete?(resources: ResourceDef[]): ResourceDef[];
   discover?(program: Program): DiscoveredExtension[];
@@ -45,9 +51,23 @@ export function validParams<T>(
   return results;
 }
 
+function deduplicateExtensions(extensions: DiscoveredExtension[]): DiscoveredExtension[] {
+  const seen = new Set<string>();
+  const result: DiscoveredExtension[] = [];
+  for (const ext of extensions) {
+    const key = ext.kind + ":" + JSON.stringify(ext.params, Object.keys(ext.params).sort());
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(ext);
+  }
+  return result;
+}
+
 export function defineProvider(config: ProviderConfig): ExtensionProvider {
   const discover = config.discover ?? function autoDiscover(program: Program): DiscoveredExtension[] {
     const discovered: DiscoveredExtension[] = [];
+
+    // Template-based discovery (alias usage)
     for (const template of config.templates) {
       const { results } = discoverTemplateInstances(program, template);
       for (const params of results) {
@@ -56,7 +76,19 @@ export function defineProvider(config: ProviderConfig): ExtensionProvider {
         }
       }
     }
-    return discovered;
+
+    // Decorator-based discovery (state map usage)
+    for (const dec of config.decorators ?? []) {
+      const stateMap = program.stateMap(dec.stateKey);
+      for (const [, entries] of stateMap) {
+        const arr = entries as Record<string, string>[];
+        for (const params of arr) {
+          discovered.push({ kind: dec.kind, params });
+        }
+      }
+    }
+
+    return deduplicateExtensions(discovered);
   };
 
   return {

@@ -1,3 +1,4 @@
 node_modules/
 tsp-output/
 dist/
+src/_provider-decorators.ts

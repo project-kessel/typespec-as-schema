@@ -6,11 +6,9 @@ import "../../lib/main.tsp";
 import "../rbac/rbac-extensions.tsp";
 
 using Kessel;
+using RBAC;
 
 namespace Inventory;
-
-alias viewPermission = RBAC.V1WorkspacePermission<"inventory", "hosts", "read", "inventory_host_view">;
-alias updatePermission = RBAC.V1WorkspacePermission<"inventory", "hosts", "write", "inventory_host_update">;
 
 /** UUID string format */
 @format("uuid")
@@ -25,6 +23,8 @@ scalar SatelliteNumericId extends string;
 // level. The emitter extracts data fields for JSON Schema and filters
 // out Kessel types automatically.
 
+@v1Permission("read", "hosts", "inventory", "inventory_host_view")
+@v1Permission("write", "hosts", "inventory", "inventory_host_update")
 @cascadeDelete("workspace")
 @resourceAnnotation("feature_flag", "staleness_v2")
 @resourceAnnotation("retention_days", "90")

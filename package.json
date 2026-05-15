@@ -11,7 +11,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/gen-decorator-wiring.mjs && tsc -p tsconfig.build.json",
     "test": "vitest run",
     "compile": "npm run build && tsp compile schema/main.tsp",
     "emit:spicedb": "npm run build && tsp compile schema/main.tsp --option typespec-as-schema.output-format=spicedb",

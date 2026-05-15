@@ -6,7 +6,19 @@
 
 import "../../lib/kessel.tsp";
 
+using TypeSpec.Reflection;
+
 namespace HBI;
+
+/**
+ * Exposes a workspace-level permission on the host resource via decorator.
+ * Alternative to the template alias `HBI.ExposeHostPermission<...>`.
+ */
+extern dec exposeHostPermission(
+  target: Model,
+  v2Perm: valueof string,
+  hostPerm: valueof string,
+);
 
 /**
  * Exposes a workspace-level permission on the host resource.

@@ -4,20 +4,44 @@
 // For each V1WorkspacePermission template instance, wires 7 relations
 // across role / role_binding / workspace, accumulates view_metadata,
 // auto-wires permission relations, and scaffolds cascade-delete.
+//
+// Also exports the $v1Permission decorator so schema authors can write
+// `@RBAC.v1Permission(verb, resource, application, v2Perm)` directly on models.
 
+import type { DecoratorContext, Model } from "@typespec/compiler";
+import { setTypeSpecNamespace } from "@typespec/compiler";
 import type { ResourceDef } from "../../src/types.js";
 import type { ProviderExpansionResult } from "../../src/provider.js";
+import { $lib } from "../../src/lib.js";
 import { defineProvider, validParams } from "../../src/define-provider.js";
 import { ref, subref, or, and, addRelation, hasRelation } from "../../src/primitives.js";
 import { findResource, cloneResources, slotName } from "../../src/utils.js";
 
+// ─── Decorator: @v1Permission ────────────────────────────────────────
+
+const V1PermStateKey = $lib.createStateSymbol("v1Permission");
+
+export function $v1Permission(
+  context: DecoratorContext,
+  target: Model,
+  verb: string,
+  resource: string,
+  application: string,
+  v2Perm: string,
+) {
+  const map = context.program.stateMap(V1PermStateKey);
+  const existing = (map.get(target) as Record<string, string>[] | undefined) ?? [];
+  existing.push({ application, resource, verb, v2Perm });
+  map.set(target, existing);
+}
+
+setTypeSpecNamespace("RBAC", $v1Permission);
+
+// ─── Types ───────────────────────────────────────────────────────────
+
 type KesselVerb = "read" | "write" | "create" | "delete";
 
 const VALID_VERBS = new Set<KesselVerb>(["read", "write", "create", "delete"]);
-
-function isKesselVerb(v: string): v is KesselVerb {
-  return VALID_VERBS.has(v as KesselVerb);
-}
 
 const VERB_TO_RELATION: Record<KesselVerb, string> = {
   read: "view",
@@ -121,6 +145,7 @@ export const rbacProvider = defineProvider({
     paramNames: ["application", "resource", "verb", "v2Perm"],
     namespace: "RBAC",
   }],
+  decorators: [{ stateKey: V1PermStateKey, kind: "V1WorkspacePermission" }],
   expand: (resources, discovered) =>
     expandV1Permissions(resources, validParams<V1Extension>(discovered, V1_KEYS, (e) => VALID_VERBS.has(e.verb))),
   onBeforeCascadeDelete: wireDeleteScaffold,

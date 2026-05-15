@@ -94,7 +94,7 @@ export {
   type TemplateDiscoveryResult,
 } from "./discover-templates.js";
 
-export { defineProvider, validParams, type ProviderConfig } from "./define-provider.js";
+export { defineProvider, validParams, type ProviderConfig, type DecoratorSource } from "./define-provider.js";
 export type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "./provider.js";
 
 export {
