@@ -1,0 +1,41 @@
+name: Schema CI
+
+on:
+  pull_request:
+    paths:
+      - "typespec-as-schema/**"
+  push:
+    branches: [main]
+    paths:
+      - "typespec-as-schema/**"
+
+defaults:
+  run:
+    working-directory: typespec-as-schema
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: typespec-as-schema/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run tests
+        run: npx vitest run
+
+      - name: Compile SpiceDB schema
+        run: npx tsp compile schema/main.tsp
+
+      - name: Compile metadata
+        run: npx tsp compile schema/main.tsp --option typespec-as-schema.output-format=metadata

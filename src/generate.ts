@@ -1,16 +1,9 @@
-import * as path from "path";
-import {
-  IR_VERSION,
-  type ResourceDef,
-  type UnifiedJsonSchema,
-  type ServiceMetadata,
-  type IntermediateRepresentation,
-  type CascadeDeleteEntry,
-  type AnnotationEntry,
-} from "./types.js";
-import { bodyToZed, slotName, flattenAnnotations, isAssignable } from "./utils.js";
-import type { ProviderDiscoveryResult } from "./types.js";
-import type { ExtensionProvider } from "./provider.js";
+import type { ResourceDef, UnifiedJsonSchema, JsonSchemaProperty, DataFieldDef, DataFieldSchema, CascadeDeleteEntry, AnnotationEntry, ServiceMetadata } from "./types.js";
+import { bodyToZed, slotName, isAssignable } from "./utils.js";
+
+export interface MetadataContribution {
+  permissionsByApp: Record<string, string[]>;
+}
 
 export function generateSpiceDB(resources: ResourceDef[]): string {
   const lines: string[] = [];
@@ -45,10 +38,30 @@ export function generateSpiceDB(resources: ResourceDef[]): string {
   return lines.join("\n");
 }
 
-/**
- * Generates unified JSON schemas for resources, excluding provider-owned
- * namespaces (e.g., "rbac") which are internal to their provider.
- */
+function dataFieldSchemaToProperty(schema: DataFieldSchema): JsonSchemaProperty {
+  if ("oneOf" in schema) {
+    return { oneOf: schema.oneOf.map(dataFieldSchemaToProperty) };
+  }
+
+  const prop: JsonSchemaProperty = { type: schema.type };
+  if ("format" in schema && schema.format) prop.format = schema.format;
+  if ("maxLength" in schema && schema.maxLength !== undefined) prop.maxLength = schema.maxLength;
+  if ("minLength" in schema && schema.minLength !== undefined) prop.minLength = schema.minLength;
+  if ("pattern" in schema && schema.pattern) prop.pattern = schema.pattern;
+  return prop;
+}
+
+const NULL_SCHEMA: JsonSchemaProperty = { type: "null" };
+
+function dataFieldToProperty(field: DataFieldDef): JsonSchemaProperty {
+  const base = dataFieldSchemaToProperty(field.schema);
+  if (field.required) return base;
+  if ("oneOf" in base) {
+    return { oneOf: [...base.oneOf, NULL_SCHEMA] };
+  }
+  return { oneOf: [base, NULL_SCHEMA] };
+}
+
 export function generateUnifiedJsonSchemas(
   resources: ResourceDef[],
   ownedNamespaces?: Set<string>,
@@ -60,7 +73,7 @@ export function generateUnifiedJsonSchemas(
     if (skip.has(res.namespace)) continue;
 
     const schema: UnifiedJsonSchema = {
-      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $schema: "http://json-schema.org/draft-07/schema#",
       $id: `${res.namespace}/${res.name}`,
       type: "object",
       properties: {},
@@ -85,6 +98,14 @@ export function generateUnifiedJsonSchemas(
       }
     }
 
+    if (res.dataFields) {
+      for (const field of res.dataFields) {
+        schema.properties[field.name] = dataFieldToProperty(field);
+        if (field.required) schema.required.push(field.name);
+        hasContent = true;
+      }
+    }
+
     if (hasContent) {
       schemas[`${res.namespace}/${res.name}`] = schema;
     }
@@ -93,14 +114,9 @@ export function generateUnifiedJsonSchemas(
   return schemas;
 }
 
-/**
- * Generates service metadata from provider discovery results and resources.
- * Param key mapping is driven by the provider interface — no hard-coded keys.
- */
 export function generateMetadata(
   resources: ResourceDef[],
-  providerResults: ProviderDiscoveryResult[],
-  providerMap: ReadonlyMap<string, ExtensionProvider>,
+  providerContributions: MetadataContribution[],
   ownedNamespaces?: Set<string>,
   annotations?: Map<string, AnnotationEntry[]>,
   cascadePolicies?: CascadeDeleteEntry[],
@@ -115,17 +131,10 @@ export function generateMetadata(
     return metadata[app];
   }
 
-  for (const pr of providerResults) {
-    const provider = providerMap.get(pr.providerId);
-    const appKey = provider?.applicationParamKey;
-    const permKey = provider?.permissionParamKey;
-    if (!appKey || !permKey) continue;
-    for (const ext of pr.discovered) {
-      const app = ext.params[appKey];
-      const perm = ext.params[permKey];
-      if (app && perm) {
-        ensure(app).permissions.push(perm);
-      }
+  for (const contribution of providerContributions) {
+    for (const [app, perms] of Object.entries(contribution.permissionsByApp)) {
+      const svc = ensure(app);
+      svc.permissions.push(...perms);
     }
   }
 
@@ -155,36 +164,4 @@ export function generateMetadata(
   }
 
   return metadata;
-}
-
-export function generateIR(
-  mainFile: string,
-  fullSchema: ResourceDef[],
-  providerResults: ProviderDiscoveryResult[],
-  providerMap: ReadonlyMap<string, ExtensionProvider>,
-  ownedNamespaces?: Set<string>,
-  annotations?: Map<string, AnnotationEntry[]>,
-  cascadePolicies?: CascadeDeleteEntry[],
-): IntermediateRepresentation {
-  const extensionsByProvider: Record<string, Record<string, string>[]> = {};
-  for (const pr of providerResults) {
-    extensionsByProvider[pr.providerId] = pr.discovered.map((d) => d.params);
-  }
-
-  const ir: IntermediateRepresentation = {
-    version: IR_VERSION,
-    generatedAt: new Date().toISOString(),
-    source: `schema/${path.basename(mainFile)}`,
-    resources: fullSchema,
-    extensions: extensionsByProvider,
-    spicedb: generateSpiceDB(fullSchema),
-    metadata: generateMetadata(fullSchema, providerResults, providerMap, ownedNamespaces, annotations, cascadePolicies),
-    jsonSchemas: generateUnifiedJsonSchemas(fullSchema, ownedNamespaces),
-  };
-
-  if (annotations && annotations.size > 0) {
-    ir.annotations = flattenAnnotations(annotations);
-  }
-
-  return ir;
 }

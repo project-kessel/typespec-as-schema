@@ -2,14 +2,20 @@
   "name": "typespec-as-schema",
   "version": "1.0.0",
   "type": "module",
+  "main": "dist/src/index.js",
   "tspMain": "lib/kessel.tsp",
+  "exports": {
+    ".": {
+      "typespec": "./lib/kessel.tsp",
+      "default": "./dist/src/index.js"
+    }
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/gen-decorator-wiring.mjs && tsc -p tsconfig.build.json",
     "test": "vitest run",
     "compile": "npm run build && tsp compile schema/main.tsp",
-    "emit:spicedb": "tsx src/spicedb-emitter.ts schema/main.tsp",
-    "emit:ir": "tsx src/spicedb-emitter.ts schema/main.tsp --ir go-loader-example/schema/resources.json",
-    "emit:metadata": "tsx src/spicedb-emitter.ts schema/main.tsp --metadata"
+    "emit:spicedb": "npm run build && tsp compile schema/main.tsp --option typespec-as-schema.output-format=spicedb",
+    "emit:metadata": "npm run build && tsp compile schema/main.tsp --option typespec-as-schema.output-format=metadata"
   },
   "keywords": [],
   "author": "",

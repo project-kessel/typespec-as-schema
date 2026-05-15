@@ -1,38 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { generateMetadata, type ResourceDef, type ExtensionProvider } from "../../src/lib.js";
-import type { ProviderDiscoveryResult } from "../../src/pipeline.js";
-
-const mockRbacProvider: ExtensionProvider = {
-  id: "rbac",
-  templates: [],
-  discover: () => [],
-  expand: (r) => ({ resources: r, warnings: [] }),
-  applicationParamKey: "application",
-  permissionParamKey: "v2Perm",
-};
-
-const defaultProviderMap = new Map<string, ExtensionProvider>([["rbac", mockRbacProvider]]);
-
-function wrapAsProviderResults(...discovered: { application: string; resource: string; verb: string; v2Perm: string }[]): ProviderDiscoveryResult[] {
-  return [{
-    providerId: "rbac",
-    discovered: discovered.map((d) => ({
-      kind: "V1WorkspacePermission",
-      params: d,
-    })),
-  }];
-}
+import { generateMetadata, type ResourceDef, type MetadataContribution } from "../../src/lib.js";
 
 describe("generateMetadata", () => {
-  const inventoryDiscovered = [
-    { application: "inventory", resource: "hosts", verb: "read", v2Perm: "inventory_host_view" },
-    { application: "inventory", resource: "hosts", verb: "write", v2Perm: "inventory_host_update" },
-  ];
+  const inventoryContribution: MetadataContribution = {
+    permissionsByApp: {
+      inventory: ["inventory_host_view", "inventory_host_update"],
+    },
+  };
 
-  const remediationsDiscovered = [
-    { application: "remediations", resource: "remediations", verb: "read", v2Perm: "remediations_remediation_view" },
-    { application: "remediations", resource: "remediations", verb: "write", v2Perm: "remediations_remediation_update" },
-  ];
+  const remediationsContribution: MetadataContribution = {
+    permissionsByApp: {
+      remediations: ["remediations_remediation_view", "remediations_remediation_update"],
+    },
+  };
 
   const inventoryResource: ResourceDef = {
     name: "host",
@@ -43,8 +23,8 @@ describe("generateMetadata", () => {
   };
 
   it("groups permissions by application", () => {
-    const providerResults = wrapAsProviderResults(...inventoryDiscovered, ...remediationsDiscovered);
-    const metadata = generateMetadata([], providerResults, defaultProviderMap);
+    const contributions = [inventoryContribution, remediationsContribution];
+    const metadata = generateMetadata([], contributions);
 
     expect(metadata.inventory.permissions).toEqual([
       "inventory_host_view",
@@ -57,8 +37,7 @@ describe("generateMetadata", () => {
   });
 
   it("includes resource names for non-RBAC resources", () => {
-    const providerResults = wrapAsProviderResults(...inventoryDiscovered);
-    const metadata = generateMetadata([inventoryResource], providerResults, defaultProviderMap);
+    const metadata = generateMetadata([inventoryResource], [inventoryContribution]);
     expect(metadata.inventory.resources).toContain("host");
   });
 
@@ -68,20 +47,18 @@ describe("generateMetadata", () => {
       namespace: "rbac",
       relations: [],
     };
-    const providerResults = wrapAsProviderResults(...inventoryDiscovered);
-    const metadata = generateMetadata([rbacResource, inventoryResource], providerResults, defaultProviderMap, new Set(["rbac"]));
+    const metadata = generateMetadata([rbacResource, inventoryResource], [inventoryContribution], new Set(["rbac"]));
     expect(metadata.rbac).toBeUndefined();
   });
 
   it("permissions-only service has empty resources array", () => {
-    const providerResults = wrapAsProviderResults(...remediationsDiscovered);
-    const metadata = generateMetadata([], providerResults, defaultProviderMap);
+    const metadata = generateMetadata([], [remediationsContribution]);
     expect(metadata.remediations.resources).toEqual([]);
   });
 
   it("produces the expected benchmark metadata structure", () => {
-    const providerResults = wrapAsProviderResults(...inventoryDiscovered, ...remediationsDiscovered);
-    const metadata = generateMetadata([inventoryResource], providerResults, defaultProviderMap);
+    const contributions = [inventoryContribution, remediationsContribution];
+    const metadata = generateMetadata([inventoryResource], contributions);
 
     expect(metadata).toEqual({
       inventory: {

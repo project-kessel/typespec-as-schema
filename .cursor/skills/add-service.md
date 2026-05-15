@@ -9,53 +9,62 @@ Guide for adding a new service to the Kessel TypeSpec schema.
 Create `schema/<service-name>.tsp`:
 
 ```typespec
-import "@typespec/json-schema";
-import "../lib/kessel.tsp";
-import "../lib/kessel-extensions.tsp";
-import "./rbac.tsp";
+import "../lib/main.tsp";
+import "./rbac/rbac-extensions.tsp";
 
-using JsonSchema;
 using Kessel;
+using RBAC;
 
 namespace <ServiceNamespace>;
 ```
 
-### 2. Define V1WorkspacePermission aliases
+The `lib/main.tsp` import brings in all Kessel types, RBAC types, and aliases. The `rbac-extensions.tsp` import brings in the `RBAC.V1WorkspacePermission` template and the `@v1Permission` decorator. `using RBAC;` lets you use `@v1Permission` without a namespace prefix.
 
-For each legacy `application:resource:verb` triple, add an alias:
+### 2. Register permissions
 
-```typespec
-alias viewPermission = Kessel.V1WorkspacePermission<
-  "myapp",       // application (lowercase)
-  "widgets",     // resource plural (lowercase)
-  "read",        // verb: "read" | "write" | "create" | "delete"
-  "myapp_widget_view"  // v2 permission name (snake_case)
->;
-```
-
-### 3. Define data fields (optional)
-
-If the resource has reportable data, create a `*Data` model with JSON Schema decorators:
+**Decorator style (preferred)** -- attach `@v1Permission` directly on the resource model:
 
 ```typespec
-@jsonSchema
-model WidgetData {
-  @format("uuid")
-  external_id?: string;
-
-  @maxLength(255)
-  display_name?: string;
+@v1Permission("read", "widgets", "myapp", "myapp_widget_view")
+@v1Permission("write", "widgets", "myapp", "myapp_widget_update")
+model Widget {
+  workspace: WorkspaceRef;
 }
 ```
 
-### 4. Define the resource model
+**Alias style (alternative)** -- for permissions-only services with no model:
+
+```typespec
+alias widgetView = RBAC.V1WorkspacePermission<"myapp", "widgets", "read", "myapp_widget_view">;
+alias widgetUpdate = RBAC.V1WorkspacePermission<"myapp", "widgets", "write", "myapp_widget_update">;
+```
+
+The RBAC provider auto-discovers both forms and wires `view`/`update` relations automatically.
+
+### 3. Define the resource model with inline data fields
+
+Data fields live directly on the resource model alongside relations. No separate `*Data` model needed:
 
 ```typespec
 model Widget {
-  workspace: Assignable<RBAC.Workspace, Cardinality.ExactlyOne>;
-  data: WidgetData;
-  view: Permission<"workspace.myapp_widget_view">;
-  update: Permission<"workspace.myapp_widget_update">;
+  workspace: WorkspaceRef;
+
+  @format("uuid") external_id?: string;
+  @maxLength(255) display_name?: string;
+}
+```
+
+The emitter extracts `Scalar` and `Union` properties as data fields for the unified JSON schema, with validation constraints (`@format`, `@maxLength`, `@pattern`) preserved.
+
+### 4. Add policies and annotations (optional)
+
+```typespec
+@v1Permission("read", "widgets", "myapp", "myapp_widget_view")
+@cascadeDelete("workspace")
+@resourceAnnotation("retention_days", "365")
+model Widget {
+  workspace: WorkspaceRef;
+  @maxLength(255) display_name?: string;
 }
 ```
 
@@ -70,15 +79,42 @@ import "./myapp.tsp";
 ### 6. Verify
 
 ```bash
-npx tsx src/spicedb-emitter.ts schema/main.tsp
+make build && npx tsp compile schema/main.tsp
 npx vitest run
 ```
+
+## Full Example
+
+```typespec
+import "../lib/main.tsp";
+import "./rbac/rbac-extensions.tsp";
+
+using Kessel;
+using RBAC;
+
+namespace ContentSources;
+
+@v1Permission("read", "templates", "content_sources", "content_sources_template_view")
+@v1Permission("write", "templates", "content_sources", "content_sources_template_edit")
+@cascadeDelete("workspace")
+@resourceAnnotation("retention_days", "365")
+model Template {
+  workspace: WorkspaceRef;
+
+  @maxLength(255) name?: string;
+  @format("uri") repository_url?: string;
+}
+```
+
+SpiceDB output includes RBAC expansion + auto-wired `view`/`update` + cascade `delete`.
 
 ## Checklist
 
 - [ ] Service file created in `schema/`
-- [ ] V1WorkspacePermission aliases for each permission
-- [ ] Resource model with `workspace` relation and computed permissions
-- [ ] Imported in `main.tsp`
-- [ ] Emitter runs without errors
-- [ ] Tests pass
+- [ ] `import "../lib/main.tsp"` and `import "./rbac/rbac-extensions.tsp"`
+- [ ] Permissions registered (decorator `@v1Permission` on model, or alias `RBAC.V1WorkspacePermission<...>`)
+- [ ] Resource model with `workspace: WorkspaceRef` and inline data fields
+- [ ] Optional: `@cascadeDelete`, `@resourceAnnotation`
+- [ ] Imported in `schema/main.tsp`
+- [ ] `make build && make run` works
+- [ ] Tests pass (`npx vitest run`)

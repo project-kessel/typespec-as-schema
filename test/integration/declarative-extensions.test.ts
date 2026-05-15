@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { generateIR, IR_VERSION } from "../../src/lib.js";
 import { expandCascadeDeletePolicies } from "../../src/expand-cascade.js";
-import { compilePipeline, allDiscovered, type PipelineResult } from "../helpers/pipeline.js";
+import { compilePipeline, type PipelineResult } from "../helpers/pipeline.js";
 
 let pipeline: PipelineResult;
-
-const allExtensions = () => allDiscovered(pipeline);
 
 beforeAll(async () => {
   pipeline = await compilePipeline();
@@ -13,13 +10,20 @@ beforeAll(async () => {
 
 // ─── Discovery Tests ─────────────────────────────────────────────────
 
-describe("V1 permission discovery", () => {
-  it("discovers 4 V1WorkspacePermission instances from schema/main.tsp", () => {
-    expect(allExtensions()).toHaveLength(4);
+describe("Provider discovery", () => {
+  it("runs RBAC and HBI providers", () => {
+    const ids = pipeline.providerResults.map((pr) => pr.providerId).sort();
+    expect(ids).toEqual(["hbi", "rbac"]);
   });
 
-  it("extracts correct v2Perm from each instance", () => {
-    const perms = allExtensions().map((e) => e.params.v2Perm).sort();
+  it("discovers 4 V1WorkspacePermission instances", () => {
+    const rbac = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    expect(rbac.discovered).toHaveLength(4);
+  });
+
+  it("extracts correct v2Perm from each V1 instance", () => {
+    const rbac = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    const perms = rbac.discovered.map((e) => e.params.v2Perm).sort();
     expect(perms).toEqual([
       "inventory_host_update",
       "inventory_host_view",
@@ -29,7 +33,8 @@ describe("V1 permission discovery", () => {
   });
 
   it("extracts correct application names", () => {
-    const apps = new Set(allExtensions().map((e) => e.params.application));
+    const rbac = pipeline.providerResults.find((pr) => pr.providerId === "rbac")!;
+    const apps = new Set(rbac.discovered.map((e) => e.params.application));
     expect(apps.has("inventory")).toBe(true);
     expect(apps.has("remediations")).toBe(true);
   });
@@ -85,6 +90,38 @@ describe("Expansion: Unified JSON Schema", () => {
     expect(hostSchema.properties["workspace_id"]).toBeDefined();
     expect(hostSchema.required).toContain("workspace_id");
   });
+
+  it("wraps optional data fields in oneOf with null", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.properties["subscription_manager_id"]).toEqual({
+      oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+    });
+    expect(hostSchema.properties["insights_id"]).toEqual({
+      oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+    });
+    expect(hostSchema.properties["ansible_host"]).toEqual({
+      oneOf: [{ type: "string", maxLength: 255 }, { type: "null" }],
+    });
+  });
+
+  it("includes union data fields as oneOf with null appended", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    const satProp = hostSchema.properties["satellite_id"];
+    expect(satProp).toBeDefined();
+    expect("oneOf" in satProp).toBe(true);
+    if ("oneOf" in satProp) {
+      expect(satProp.oneOf).toHaveLength(3);
+      expect(satProp.oneOf[satProp.oneOf.length - 1]).toEqual({ type: "null" });
+    }
+  });
+
+  it("data fields are optional (not in required)", () => {
+    const hostSchema = pipeline.unifiedJsonSchemas["inventory/host"];
+    expect(hostSchema.required).not.toContain("subscription_manager_id");
+    expect(hostSchema.required).not.toContain("ansible_host");
+    expect(hostSchema.required).not.toContain("satellite_id");
+    expect(hostSchema.required).not.toContain("insights_id");
+  });
 });
 
 // ─── Annotation Discovery Tests ─────────────────────────────────────
@@ -118,44 +155,6 @@ describe("Annotation discovery", () => {
     expect(pipeline.spicedbOutput).not.toContain("feature_flag");
     expect(pipeline.spicedbOutput).not.toContain("retention_days");
     expect(pipeline.spicedbOutput).not.toContain("staleness_v2");
-  });
-});
-
-// ─── IR Annotation Tests ────────────────────────────────────────────
-
-describe("IR generation with annotations", () => {
-  it("includes annotations in IR output", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
-    expect(ir.annotations).toBeDefined();
-    expect(ir.annotations!["inventory/host"]).toBeDefined();
-  });
-
-  it("IR annotations contain correct key-value pairs", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
-    const hostAnnotations = ir.annotations!["inventory/host"];
-    expect(hostAnnotations["feature_flag"]).toBe("staleness_v2");
-    expect(hostAnnotations["retention_days"]).toBe("90");
-  });
-
-  it("IR version matches IR_VERSION constant", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
-    expect(ir.version).toBe(IR_VERSION);
-  });
-
-  it("IR omits annotations field when no annotations exist", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap);
-    expect(ir.annotations).toBeUndefined();
-  });
-
-  it("IR contains all expected top-level fields", () => {
-    const ir = generateIR("test.tsp", pipeline.fullSchema, pipeline.providerResults, pipeline.providerMap, undefined, pipeline.annotations);
-    expect(ir.generatedAt).toBeDefined();
-    expect(ir.source).toBe("schema/test.tsp");
-    expect(ir.resources.length).toBeGreaterThan(0);
-    expect(Object.keys(ir.extensions).length).toBeGreaterThan(0);
-    expect(ir.spicedb).toContain("definition rbac/");
-    expect(ir.metadata).toBeDefined();
-    expect(ir.jsonSchemas).toBeDefined();
   });
 });
 

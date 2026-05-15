@@ -9,10 +9,25 @@
 
 import "../../lib/kessel.tsp";
 
-namespace Kessel;
+using Kessel;
+using TypeSpec.Reflection;
+
+namespace RBAC;
 
 /** Allowed verbs for permission registration. */
 alias KesselVerb = "read" | "write" | "create" | "delete";
+
+/**
+ * Registers a V1 workspace permission on a resource model.
+ * Alternative to the template alias `RBAC.V1WorkspacePermission<...>`.
+ */
+extern dec v1Permission(
+  target: Model,
+  verb: valueof KesselVerb,
+  resource: valueof string,
+  application: valueof string,
+  v2Perm: valueof string,
+);
 
 model V1WorkspacePermission<
   App extends string,

@@ -1,248 +1,152 @@
 // RBAC Extension Provider
 //
-// Owns the V1WorkspacePermission expansion logic: the 7 mutations per
-// permission, view_metadata accumulation, and cascade-delete scaffold wiring.
+// Equivalent of TS-POC's schema/rbac.ts → create_v1_based_workspace_permission().
+// For each V1WorkspacePermission template instance, wires 7 relations
+// across role / role_binding / workspace, accumulates view_metadata,
+// auto-wires permission relations, and scaffolds cascade-delete.
 //
-// This is the TypeSpec equivalent of:
-//   - TS-POC:     schema/rbac.ts → create_v1_based_workspace_permission()
-//   - Starlark:   schema/rbac.star → v1_based_permission()
-//   - CUE:        rbac/rbac.cue → #AddV1BasedPermission
-//
-// The platform pipeline invokes this provider's discover() and expand()
-// through the ExtensionProvider interface. RBAC owns what happens when a
-// V1WorkspacePermission alias is instantiated; the platform only orchestrates.
+// Also exports the $v1Permission decorator so schema authors can write
+// `@RBAC.v1Permission(verb, resource, application, v2Perm)` directly on models.
 
-import type { Program } from "@typespec/compiler";
+import type { DecoratorContext, Model } from "@typespec/compiler";
+import { setTypeSpecNamespace } from "@typespec/compiler";
 import type { ResourceDef } from "../../src/types.js";
-import type { ExtensionTemplateDef } from "../../src/registry.js";
-import type { ExtensionProvider, DiscoveredExtension, ProviderExpansionResult } from "../../src/provider.js";
-import type { DiscoveryWarnings } from "../../src/discover-platform.js";
-import { discoverExtensionInstances } from "../../src/discover-extensions.js";
+import type { ProviderExpansionResult } from "../../src/provider.js";
+import { $lib } from "../../src/lib.js";
+import { defineProvider, validParams } from "../../src/define-provider.js";
 import { ref, subref, or, and, addRelation, hasRelation } from "../../src/primitives.js";
-import { findResource, cloneResources } from "../../src/utils.js";
+import { findResource, cloneResources, slotName } from "../../src/utils.js";
 
-// ─── RBAC domain types ──────────────────────────────────────────────
+// ─── Decorator: @v1Permission ────────────────────────────────────────
+
+const V1PermStateKey = $lib.createStateSymbol("v1Permission");
+
+export function $v1Permission(
+  context: DecoratorContext,
+  target: Model,
+  verb: string,
+  resource: string,
+  application: string,
+  v2Perm: string,
+) {
+  const map = context.program.stateMap(V1PermStateKey);
+  const existing = (map.get(target) as Record<string, string>[] | undefined) ?? [];
+  existing.push({ application, resource, verb, v2Perm });
+  map.set(target, existing);
+}
+
+setTypeSpecNamespace("RBAC", $v1Permission);
+
+// ─── Types ───────────────────────────────────────────────────────────
 
 type KesselVerb = "read" | "write" | "create" | "delete";
 
-export interface V1Extension {
+const VALID_VERBS = new Set<KesselVerb>(["read", "write", "create", "delete"]);
+
+const VERB_TO_RELATION: Record<KesselVerb, string> = {
+  read: "view",
+  write: "update",
+  create: "create",
+  delete: "delete",
+};
+
+interface V1Extension {
   application: string;
   resource: string;
   verb: KesselVerb;
   v2Perm: string;
 }
 
-interface RBACScaffold {
-  role: ResourceDef;
-  roleBinding: ResourceDef;
-  workspace: ResourceDef;
-}
+const V1_KEYS = ["application", "resource", "verb", "v2Perm"] as const;
 
-// ─── RBAC constants ─────────────────────────────────────────────────
+// ─── V1 Permission Expansion ─────────────────────────────────────────
 
-const RBAC_RELATIONS = {
-  subject: "subject",
-  granted: "granted",
-  binding: "binding",
-  parent: "parent",
-  globalWildcard: "any_any_any",
-} as const;
-
-export const VALID_VERBS = new Set<KesselVerb>(["read", "write", "create", "delete"]);
-
-function isKesselVerb(v: string): v is KesselVerb {
-  return VALID_VERBS.has(v as KesselVerb);
-}
-
-// ─── RBAC template definitions ──────────────────────────────────────
-
-const V1_WORKSPACE_PERMISSION_TEMPLATE: ExtensionTemplateDef = {
-  templateName: "V1WorkspacePermission",
-  paramNames: ["application", "resource", "verb", "v2Perm"],
-  namespace: "Kessel",
-};
-
-// ─── RBAC scaffold resolution ───────────────────────────────────────
-
-function resolveRBACScaffold(resources: ResourceDef[]): { scaffold: RBACScaffold | null; warnings: string[] } {
-  const role = findResource(resources, "rbac", "role");
-  const roleBinding = findResource(resources, "rbac", "role_binding");
-  const workspace = findResource(resources, "rbac", "workspace");
-
-  if (!role || !roleBinding || !workspace) {
-    const missing = [
-      !role && "rbac/role",
-      !roleBinding && "rbac/role_binding",
-      !workspace && "rbac/workspace",
-    ].filter(Boolean);
-    return {
-      scaffold: null,
-      warnings: [`RBAC scaffold incomplete — missing ${missing.join(", ")}. V1 permission expansion skipped.`],
-    };
-  }
-
-  return { scaffold: { role, roleBinding, workspace }, warnings: [] };
-}
-
-// ─── RBAC expansion helpers ─────────────────────────────────────────
-
-function addBoolRelation(resource: ResourceDef, name: string, seen: Set<string>): void {
-  if (seen.has(name)) return;
-  seen.add(name);
-  addRelation(resource, { name, body: { kind: "bool", target: "rbac/principal" } });
-}
-
-// ─── V1 Permission Expansion ────────────────────────────────────────
-
-export function expandV1Permissions(baseResources: ResourceDef[], permissions: V1Extension[]): ProviderExpansionResult {
+function expandV1Permissions(baseResources: ResourceDef[], permissions: V1Extension[]): ProviderExpansionResult {
   const resources = cloneResources(baseResources);
 
   if (!resources.some((r) => r.name === "principal" && r.namespace === "rbac")) {
     resources.unshift({ name: "principal", namespace: "rbac", relations: [] });
   }
 
-  const { scaffold, warnings } = resolveRBACScaffold(resources);
-  if (!scaffold) return { resources, warnings };
+  const role = findResource(resources, "rbac", "role");
+  const roleBinding = findResource(resources, "rbac", "role_binding");
+  const workspace = findResource(resources, "rbac", "workspace");
 
-  const { role, roleBinding, workspace } = scaffold;
-
-  const addedBoolRelations = new Set<string>();
-  for (const rel of role.relations) {
-    if (rel.body.kind === "bool") addedBoolRelations.add(rel.name);
+  if (!role || !roleBinding || !workspace) {
+    return { resources, warnings: ["RBAC scaffold incomplete — expansion skipped."] };
   }
 
-  const viewMetadataRefs: string[] = [];
+  const seenBools = new Set(role.relations.filter((r) => r.body.kind === "bool").map((r) => r.name));
+  const viewMetadata: string[] = [];
 
-  for (const perm of permissions) {
-    const { application: app, resource: res, verb, v2Perm: v2 } = perm;
-
-    addBoolRelation(role, `${app}_any_any`, addedBoolRelations);
-    addBoolRelation(role, `${app}_${res}_any`, addedBoolRelations);
-    addBoolRelation(role, `${app}_any_${verb}`, addedBoolRelations);
-    addBoolRelation(role, `${app}_${res}_${verb}`, addedBoolRelations);
+  for (const { application: app, resource: res, verb, v2Perm: v2 } of permissions) {
+    for (const name of [`${app}_any_any`, `${app}_${res}_any`, `${app}_any_${verb}`, `${app}_${res}_${verb}`]) {
+      if (!seenBools.has(name)) {
+        seenBools.add(name);
+        addRelation(role, { name, body: { kind: "bool", target: "rbac/principal" } });
+      }
+    }
 
     addRelation(role, {
       name: v2,
-      body: or(
-        ref(RBAC_RELATIONS.globalWildcard),
-        ref(`${app}_any_any`),
-        ref(`${app}_${res}_any`),
-        ref(`${app}_any_${verb}`),
-        ref(`${app}_${res}_${verb}`),
-      ),
+      body: or(ref("any_any_any"), ref(`${app}_any_any`), ref(`${app}_${res}_any`), ref(`${app}_any_${verb}`), ref(`${app}_${res}_${verb}`)),
     });
 
-    addRelation(roleBinding, {
-      name: v2,
-      body: and(ref(RBAC_RELATIONS.subject), subref(RBAC_RELATIONS.granted, v2)),
-    });
+    addRelation(roleBinding, { name: v2, body: and(ref("subject"), subref("granted", v2)) });
 
-    addRelation(workspace, {
-      name: v2,
-      body: or(subref(RBAC_RELATIONS.binding, v2), subref(RBAC_RELATIONS.parent, v2)),
-    });
+    addRelation(workspace, { name: v2, body: or(subref("binding", v2), subref("parent", v2)) });
 
-    if (verb === "read") {
-      viewMetadataRefs.push(v2);
+    if (verb === "read") viewMetadata.push(v2);
+  }
+
+  if (viewMetadata.length > 0) {
+    addRelation(workspace, { name: "view_metadata", body: or(...viewMetadata.map((r) => ref(r))) });
+  }
+
+  // Auto-wire permission relations on service resources
+  for (const resource of resources) {
+    const resPerms = permissions.filter((p) => p.application === resource.namespace);
+    for (const perm of resPerms) {
+      const relName = VERB_TO_RELATION[perm.verb];
+      if (!resource.relations.some((r) => r.name === relName) && resource.relations.some((r) => r.name === "workspace")) {
+        resource.relations.push({
+          name: relName,
+          body: { kind: "subref", name: slotName("workspace"), subname: perm.v2Perm },
+        });
+      }
     }
   }
 
-  if (viewMetadataRefs.length > 0) {
-    addRelation(workspace, {
-      name: "view_metadata",
-      body: or(...viewMetadataRefs.map((r) => ref(r))),
-    });
-  }
-
-  return { resources, warnings };
+  return { resources, warnings: [] };
 }
 
-// ─── Cascade-Delete Scaffold Wiring ─────────────────────────────────
+// ─── Cascade-Delete Scaffold ─────────────────────────────────────────
 
-export function wireDeleteScaffold(resources: ResourceDef[]): ResourceDef[] {
-  const result = cloneResources(resources);
-  const { scaffold } = resolveRBACScaffold(result);
-  if (!scaffold) return result;
+function wireDeleteScaffold(baseResources: ResourceDef[]): ResourceDef[] {
+  const resources = cloneResources(baseResources);
+  const role = findResource(resources, "rbac", "role");
+  const roleBinding = findResource(resources, "rbac", "role_binding");
+  const workspace = findResource(resources, "rbac", "workspace");
+  if (!role || !roleBinding || !workspace) return resources;
 
-  const { role, roleBinding, workspace } = scaffold;
+  if (!hasRelation(role, "delete")) addRelation(role, { name: "delete", body: ref("any_any_any") });
+  if (!hasRelation(roleBinding, "delete")) addRelation(roleBinding, { name: "delete", body: and(ref("subject"), subref("granted", "delete")) });
+  if (!hasRelation(workspace, "delete")) addRelation(workspace, { name: "delete", body: or(subref("binding", "delete"), subref("parent", "delete")) });
 
-  if (!hasRelation(role, "delete")) {
-    addRelation(role, { name: "delete", body: ref(RBAC_RELATIONS.globalWildcard) });
-  }
-  if (!hasRelation(roleBinding, "delete")) {
-    addRelation(roleBinding, {
-      name: "delete",
-      body: and(ref(RBAC_RELATIONS.subject), subref(RBAC_RELATIONS.granted, "delete")),
-    });
-  }
-  if (!hasRelation(workspace, "delete")) {
-    addRelation(workspace, {
-      name: "delete",
-      body: or(subref(RBAC_RELATIONS.binding, "delete"), subref(RBAC_RELATIONS.parent, "delete")),
-    });
-  }
-  return result;
+  return resources;
 }
 
-// ─── Provider Implementation ────────────────────────────────────────
+// ─── Provider Definition ─────────────────────────────────────────────
 
-export function discoverV1Permissions(program: Program, warnings?: DiscoveryWarnings): V1Extension[] {
-  const { results, skipped, aliasesAttempted, aliasesResolved } = discoverExtensionInstances(
-    program,
-    V1_WORKSPACE_PERMISSION_TEMPLATE,
-  );
-  if (warnings) {
-    warnings.skipped.push(...skipped);
-    warnings.stats.aliasesAttempted += aliasesAttempted;
-    warnings.stats.aliasesResolved += aliasesResolved;
-  }
-  const extensions = results
-    .filter((p) => !!(p.application && p.resource && p.verb && p.v2Perm) && isKesselVerb(p.verb))
-    .map((p) => ({
-      application: p.application,
-      resource: p.resource,
-      verb: p.verb as KesselVerb,
-      v2Perm: p.v2Perm,
-    }));
-  if (warnings) warnings.stats.extensionsFound += extensions.length;
-  return extensions;
-}
-
-export const rbacProvider: ExtensionProvider = {
+export const rbacProvider = defineProvider({
   id: "rbac",
-  ownedNamespaces: ["rbac"],
-  costPerInstance: 7,
-  applicationParamKey: "application",
-  permissionParamKey: "v2Perm",
-
-  templates: [V1_WORKSPACE_PERMISSION_TEMPLATE],
-
-  discover(program: Program): DiscoveredExtension[] {
-    const v1Perms = discoverV1Permissions(program);
-    return v1Perms.map((p) => ({
-      kind: "V1WorkspacePermission",
-      params: {
-        application: p.application,
-        resource: p.resource,
-        verb: p.verb,
-        v2Perm: p.v2Perm,
-      },
-    }));
-  },
-
-  expand(resources: ResourceDef[], discovered: DiscoveredExtension[]): ProviderExpansionResult {
-    const permissions: V1Extension[] = discovered
-      .filter((d) => d.kind === "V1WorkspacePermission")
-      .map((d) => ({
-        application: d.params.application,
-        resource: d.params.resource,
-        verb: d.params.verb as KesselVerb,
-        v2Perm: d.params.v2Perm,
-      }));
-    return expandV1Permissions(resources, permissions);
-  },
-
-  onBeforeCascadeDelete(resources: ResourceDef[]): ResourceDef[] {
-    return wireDeleteScaffold(resources);
-  },
-};
+  templates: [{
+    templateName: "V1WorkspacePermission",
+    paramNames: ["application", "resource", "verb", "v2Perm"],
+    namespace: "RBAC",
+  }],
+  decorators: [{ stateKey: V1PermStateKey, kind: "V1WorkspacePermission" }],
+  expand: (resources, discovered) =>
+    expandV1Permissions(resources, validParams<V1Extension>(discovered, V1_KEYS, (e) => VALID_VERBS.has(e.verb))),
+  onBeforeCascadeDelete: wireDeleteScaffold,
+});

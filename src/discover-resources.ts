@@ -7,16 +7,18 @@
 import {
   navigateProgram,
   isTemplateInstance,
+  getFormat,
+  getMaxLength,
+  getMinLength,
+  getPattern,
   type Program,
   type Model,
+  type ModelProperty,
+  type Scalar,
   type Type,
 } from "@typespec/compiler";
-import type { RelationDef, ResourceDef } from "./types.js";
-import type { ExtensionTemplateDef } from "./registry.js";
-import { getNamespaceFQN, camelToSnake } from "./utils.js";
-import { parsePermissionExpr } from "./parser.js";
-import { findExtensionTemplate, isInstanceOf } from "./discover-extensions.js";
-import { PLATFORM_TEMPLATES } from "./registry.js";
+import type { RelationBody, RelationDef, ResourceDef, DataFieldDef, DataFieldSchema } from "./types.js";
+import { getNamespaceFQN, camelToSnake, slotName } from "./utils.js";
 
 // ─── Type helpers ────────────────────────────────────────────────────
 
@@ -53,20 +55,137 @@ function resolveTargetName(t: Type | undefined): string {
   return "unknown";
 }
 
+// ─── Permission expression type walker ───────────────────────────────
+
+function extractStringLiteral(model: Model, propName: string): string | undefined {
+  const prop = model.properties.get(propName);
+  if (!prop) return undefined;
+  const t = prop.type;
+  if (t.kind === "Scalar" && t.name) return t.name;
+  if ("value" in t) return String((t as unknown as Record<string, unknown>).value);
+  return undefined;
+}
+
+function modelToRelationBody(model: Model): RelationBody | null {
+  if (isKesselType(model, "Ref")) {
+    const name = extractStringLiteral(model, "__name");
+    if (!name) return null;
+    return { kind: "ref", name };
+  }
+
+  if (isKesselType(model, "SubRef")) {
+    const relation = extractStringLiteral(model, "__relation");
+    const sub = extractStringLiteral(model, "__sub");
+    if (!relation || !sub) return null;
+    return { kind: "subref", name: slotName(relation), subname: sub };
+  }
+
+  if (isKesselType(model, "Or")) {
+    const leftProp = model.properties.get("__left");
+    const rightProp = model.properties.get("__right");
+    if (!leftProp || !rightProp) return null;
+    if (leftProp.type.kind !== "Model" || rightProp.type.kind !== "Model") return null;
+    const left = modelToRelationBody(leftProp.type as Model);
+    const right = modelToRelationBody(rightProp.type as Model);
+    if (!left || !right) return null;
+    const leftMembers = left.kind === "or" ? left.members : [left];
+    const rightMembers = right.kind === "or" ? right.members : [right];
+    return { kind: "or", members: [...leftMembers, ...rightMembers] };
+  }
+
+  if (isKesselType(model, "And")) {
+    const leftProp = model.properties.get("__left");
+    const rightProp = model.properties.get("__right");
+    if (!leftProp || !rightProp) return null;
+    if (leftProp.type.kind !== "Model" || rightProp.type.kind !== "Model") return null;
+    const left = modelToRelationBody(leftProp.type as Model);
+    const right = modelToRelationBody(rightProp.type as Model);
+    if (!left || !right) return null;
+    const leftMembers = left.kind === "and" ? left.members : [left];
+    const rightMembers = right.kind === "and" ? right.members : [right];
+    return { kind: "and", members: [...leftMembers, ...rightMembers] };
+  }
+
+  return null;
+}
+
+// ─── Data field extraction ────────────────────────────────────────────
+
+function resolveBaseScalar(scalar: Scalar): Scalar {
+  let base = scalar;
+  while (base.baseScalar) base = base.baseScalar;
+  return base;
+}
+
+function scalarToSchema(
+  program: Program,
+  scalar: Scalar,
+  prop: ModelProperty | null,
+): DataFieldSchema | null {
+  const base = resolveBaseScalar(scalar);
+  if (base.name !== "string") return null;
+
+  const schema: DataFieldSchema & { type: "string" } = { type: "string" };
+  const format = getFormat(program, scalar) ?? (prop ? getFormat(program, prop) : undefined);
+  if (format) schema.format = format;
+  const maxLen = getMaxLength(program, scalar) ?? (prop ? getMaxLength(program, prop) : undefined);
+  if (maxLen !== undefined) schema.maxLength = maxLen;
+  const minLen = getMinLength(program, scalar) ?? (prop ? getMinLength(program, prop) : undefined);
+  if (minLen !== undefined) schema.minLength = minLen;
+  const pattern = getPattern(program, scalar) ?? (prop ? getPattern(program, prop) : undefined);
+  if (pattern) schema.pattern = pattern;
+  return schema;
+}
+
+function extractDataField(
+  program: Program,
+  name: string,
+  prop: ModelProperty,
+): DataFieldDef | null {
+  const propType = prop.type;
+
+  if (propType.kind === "Scalar") {
+    const schema = scalarToSchema(program, propType, prop);
+    if (!schema) return null;
+    return { name, required: !prop.optional, schema };
+  }
+
+  if (propType.kind === "Union") {
+    const variants: DataFieldSchema[] = [];
+    for (const [, variant] of propType.variants) {
+      if (variant.type.kind === "Scalar") {
+        const schema = scalarToSchema(program, variant.type as Scalar, null);
+        if (schema) variants.push(schema);
+      }
+    }
+    if (variants.length === 0) return null;
+    if (variants.length === 1) {
+      return { name, required: !prop.optional, schema: variants[0] };
+    }
+    return { name, required: !prop.optional, schema: { oneOf: variants } };
+  }
+
+  return null;
+}
+
 // ─── Resource model conversion ───────────────────────────────────────
 
 function modelToResource(
+  program: Program,
   model: Model,
-  nsPrefix: string
+  nsPrefix: string,
 ): ResourceDef | null {
   const relations: RelationDef[] = [];
+  const dataFields: DataFieldDef[] = [];
   let hasRelations = false;
 
   for (const [name, prop] of model.properties) {
-    if (name === "data") continue;
-
     const propType = prop.type;
-    if (propType.kind !== "Model") continue;
+    if (propType.kind !== "Model") {
+      const field = extractDataField(program, name, prop);
+      if (field) dataFields.push(field);
+      continue;
+    }
 
     if (isKesselType(propType, "Assignable")) {
       hasRelations = true;
@@ -89,18 +208,11 @@ function modelToResource(
     } else if (isKesselType(propType, "Permission")) {
       hasRelations = true;
       const exprProp = propType.properties.get("__expr");
-      let expr = "";
-      if (exprProp) {
-        const exprType = exprProp.type;
-        if (exprType.kind === "Scalar" && exprType.name) {
-          expr = exprType.name;
-        } else if ("value" in exprType) {
-          expr = String((exprType as unknown as Record<string, unknown>).value);
+      if (exprProp && exprProp.type.kind === "Model") {
+        const body = modelToRelationBody(exprProp.type as Model);
+        if (body) {
+          relations.push({ name, body });
         }
-      }
-      const parsed = parsePermissionExpr(expr);
-      if (parsed) {
-        relations.push({ name, body: parsed });
       }
     }
   }
@@ -112,25 +224,21 @@ function modelToResource(
     name: camelToSnake(model.name),
     namespace: nsName || getNamespaceFQN(model.namespace)?.toLowerCase() || "unknown",
     relations,
+    ...(dataFields.length > 0 ? { dataFields } : {}),
   };
 }
 
 /**
  * Discovers resource models from the compiled program.
- * Accepts the full list of extension templates (platform + providers) so
- * extension template instances are excluded from resource discovery.
+ * Extension template instances (V1WorkspacePermission, CascadeDeletePolicy, etc.)
+ * are naturally excluded because modelToResource only picks up models with
+ * Assignable, BoolRelation, or Permission properties.
  */
 export function discoverResources(
   program: Program,
-  allTemplates?: ExtensionTemplateDef[],
 ): { resources: ResourceDef[] } {
-  const templates = allTemplates ?? [...PLATFORM_TEMPLATES];
   const resources: ResourceDef[] = [];
   const seenResources = new Set<string>();
-
-  const extensionTemplates = templates
-    .map((def) => findExtensionTemplate(program, def.templateName, def.namespace))
-    .filter((m): m is Model => m !== null);
 
   navigateProgram(program, {
     model(model: Model) {
@@ -139,18 +247,13 @@ export function discoverResources(
       const modelNsFQN = getNamespaceFQN(model.namespace);
       if (modelNsFQN.endsWith("Kessel")) return;
 
-      if (extensionTemplates.some((t) => isInstanceOf(model, t))) {
-        return;
-      }
-
-      if (model.name.endsWith("Data")) return;
       if (!model.name || model.name === "") return;
 
       const nsPrefix = modelNsFQN;
       const key = `${nsPrefix}/${model.name}`;
       if (seenResources.has(key)) return;
 
-      const resource = modelToResource(model, nsPrefix);
+      const resource = modelToResource(program, model, nsPrefix);
       if (resource) {
         seenResources.add(key);
         resources.push(resource);
